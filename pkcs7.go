@@ -1,6 +1,7 @@
 package pkcs7 // import "fullsailor.com/pkcs7"
 import (
 	"crypto"
+	"crypto/hmac"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -54,14 +55,16 @@ type attribute struct {
 	Value asn1.RawValue `asn1:"set"`
 }
 
+type issuerAndSerial struct {
+	IssuerName   pkix.RDNSequence
+	SerialNumber *big.Int
+}
+
 type signerInfo struct {
-	Version               int `asn1:"default:1"`
-	IssuerAndSerialNumber struct {
-		IssuerName   pkix.RDNSequence
-		SerialNumber *big.Int
-	}
+	Version                   int `asn1:"default:1"`
+	IssuerAndSerialNumber     issuerAndSerial
 	DigestAlgorithm           pkix.AlgorithmIdentifier
-	AuthenticatedAttributes   asn1.RawValue `asn1:"optional,tag:0"`
+	AuthenticatedAttributes   []attribute `asn1:"optional,tag:0"`
 	DigestEncryptionAlgorithm pkix.AlgorithmIdentifier
 	EncryptedDigest           []byte
 	UnauthenticatedAttributes []attribute `asn1:"optional,tag:1"`
@@ -105,44 +108,63 @@ type digestInfo struct {
 
 // Verify checks the signatures of a PKCS7 object
 func (p7 *PKCS7) Verify() (err error) {
-	cert := p7.Certificates[0]
-	algo := x509.SHA1WithRSA
-	signer := p7.Signers[0]
-	//content := append(p7.Content, p7.Signers[0].AuthenticatedAttributes.Bytes...)
-	/*
-		digest, err := getDigestFromAttributes(p7.Signers[0].AuthenticatedAttributes)
-		if err != nil {
-			return
+	if len(p7.Signers) == 0 {
+		return errors.New("pkcs7: Message has no signers")
+	}
+	for _, signer := range p7.Signers {
+		if err := verifySignature(p7, signer); err != nil {
+			return err
 		}
-		fmt.Printf("---> provided message digest: %+v\n", digest)
+	}
+	return nil
+}
 
+func verifySignature(p7 *PKCS7, signer signerInfo) error {
+
+	if len(signer.AuthenticatedAttributes) > 0 {
+
+		// TODO(fullsailor): First check the content type match
+		digest, err := getDigestFromAttributes(signer.AuthenticatedAttributes)
+		if err != nil {
+			return err
+		}
 		h := crypto.SHA1.New()
 		h.Write(p7.Content)
 		computed := h.Sum(nil)
-		fmt.Printf("---> computed message digest: %+v\n", computed)
-
-		auth, err := asn1.Marshal(p7.Signers[0].AuthenticatedAttributes)
-		if err != nil {
-			return
+		if !hmac.Equal(digest, computed) {
+			return errors.New("pkcs7: Message digest mismatch")
 		}
-		fmt.Printf("---> auth bytes: %+v\n", auth)
-	*/
+	}
+	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
+	if cert == nil {
+		return errors.New("pkcs7: No certificate for signer")
+	}
+
 	h := crypto.SHA1.New()
 	h.Write(p7.Content)
-	h.Write(signer.AuthenticatedAttributes.Bytes)
+	b, err := asn1.Marshal(struct {
+		A []attribute `asn1:"set"`
+	}{A: signer.AuthenticatedAttributes})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("--> asn.1 attributes before %x\n", b)
+	b = b[3:] // Remove the leading sequence octets
+	fmt.Printf("--> asn.1 attributes after %x\n", b)
+	h.Write(b)
 	messageDigest := h.Sum(nil)
 	di := digestInfo{
-		Algorithm: signer.DigestAlgorithm, Digest: messageDigest,
+		Algorithm: signer.DigestAlgorithm,
+		Digest:    messageDigest,
 	}
+	fmt.Printf("--> digestInfo %+v\n", di)
 	info, err := asn1.Marshal(di)
 	if err != nil {
-		return
+		return err
 	}
+	fmt.Printf("--> asn.1 digestInfo %x\n", info)
+	algo := x509.SHA1WithRSA
 	return cert.CheckSignature(algo, info, signer.EncryptedDigest)
-}
-
-func verifySignature(p7 *PKCS7, signer signerInfo) err {
-
 }
 
 var (
@@ -158,4 +180,14 @@ func getDigestFromAttributes(attributes []attribute) (digest []byte, err error) 
 		}
 	}
 	return nil, errors.New("pkcs7: Missing messageDigest attribute")
+}
+
+func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
+	for _, cert := range certs {
+		if cert.SerialNumber.Cmp(ias.SerialNumber) == 0 {
+			// TODO(fullsailor): Compare Issuer Name & Cert Subject
+			return cert
+		}
+	}
+	return nil
 }
