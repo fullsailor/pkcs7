@@ -19,7 +19,7 @@ type PKCS7 struct {
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList
 	Signers      []signerInfo
-	raw          interface{}
+	raw          signedData
 }
 
 type contentInfo struct {
@@ -91,6 +91,7 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 		fmt.Printf("CRLs: %v", crl)
 	}
 	var content unsignedData
+	fmt.Printf("--> Signed Data Version %d\n", sd.Version)
 	asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &content)
 	return &PKCS7{
 		info:         info,
@@ -120,7 +121,7 @@ func (p7 *PKCS7) Verify() (err error) {
 }
 
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
-
+	fmt.Printf("--> Signer Info Version: %d\n", signer.Version)
 	if len(signer.AuthenticatedAttributes) > 0 {
 
 		// TODO(fullsailor): First check the content type match
@@ -140,31 +141,30 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	h := crypto.SHA1.New()
-	h.Write(p7.Content)
-	b, err := asn1.Marshal(struct {
+	encodedAttributes, err := asn1.Marshal(struct {
 		A []attribute `asn1:"set"`
 	}{A: signer.AuthenticatedAttributes})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("--> asn.1 attributes before %x\n", b)
-	b = b[3:] // Remove the leading sequence octets
-	fmt.Printf("--> asn.1 attributes after %x\n", b)
-	h.Write(b)
-	messageDigest := h.Sum(nil)
-	di := digestInfo{
-		Algorithm: signer.DigestAlgorithm,
-		Digest:    messageDigest,
-	}
-	fmt.Printf("--> digestInfo %+v\n", di)
-	info, err := asn1.Marshal(di)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("--> asn.1 digestInfo %x\n", info)
+	encodedAttributes = encodedAttributes[3:] // Remove the leading sequence octets
+	/*
+		fmt.Printf("--> asn.1 attributes %x\n", encodedAttributes)
+		h.Write(encodedAttributes)
+		messageDigest := h.Sum(nil)
+		di := digestInfo{
+			Algorithm: signer.DigestAlgorithm,
+			Digest:    messageDigest,
+		}
+		fmt.Printf("--> digestInfo %+v\n", di)
+		info, err := asn1.Marshal(di)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("--> asn.1 digestInfo %x\n---> length:%d\n", info, len(info))
+	*/
 	algo := x509.SHA1WithRSA
-	return cert.CheckSignature(algo, info, signer.EncryptedDigest)
+	return cert.CheckSignature(algo, encodedAttributes, signer.EncryptedDigest)
 }
 
 var (
