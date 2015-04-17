@@ -3,7 +3,6 @@ package pkcs7
 import (
 	"bytes"
 	"errors"
-	"fmt"
 )
 
 type asn1Object interface {
@@ -48,18 +47,18 @@ func (p asn1Primitive) EncodeTo(out *bytes.Buffer) error {
 }
 
 func ber2der(ber []byte) ([]byte, error) {
-	fmt.Printf("--> ber2der: Transcoding %d bytes\n", len(ber))
+	//fmt.Printf("--> ber2der: Transcoding %d bytes\n", len(ber))
 	out := new(bytes.Buffer)
 
-	obj, offset, err := readObject(ber, 0)
+	obj, _, err := readObject(ber, 0)
 	if err != nil {
 		return nil, err
 	}
 	obj.EncodeTo(out)
 
-	if offset < len(ber) {
-		return nil, errors.New("ber2der: Content longer than expected")
-	}
+	// if offset < len(ber) {
+	//	return nil, fmt.Errorf("ber2der: Content longer than expected. Got %d, expected %d", offset, len(ber))
+	//}
 
 	return out.Bytes(), nil
 }
@@ -107,7 +106,7 @@ func encodeLength(out *bytes.Buffer, length int) (err error) {
 }
 
 func readObject(ber []byte, offset int) (asn1Object, int, error) {
-	fmt.Printf("\n====> Starting readObject at offset: %d\n\n", offset)
+	//fmt.Printf("\n====> Starting readObject at offset: %d\n\n", offset)
 	tagStart := offset
 	b := ber[offset]
 	offset++
@@ -123,16 +122,23 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	}
 	tagEnd := offset
 
+	kind := b & 0x20
+	/*
+		if kind == 0 {
+			fmt.Print("--> Primitive\n")
+		} else {
+			fmt.Print("--> Constructed\n")
+		}
+	*/
 	// read length
 	var length int
 	l := ber[offset]
 	offset++
 	if l > 0x80 {
 		numberOfBytes := (int)(l & 0x7F)
-		fmt.Printf("--> length indicator: %x\n", l)
-		fmt.Printf("--> length bytes: %x\n", ber[offset:offset+numberOfBytes])
+		//fmt.Printf("--> (compute length) indicator byte: %x\n", l)
+		//fmt.Printf("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
 		for i := 0; i < numberOfBytes; i++ {
-			length = length*0xFF + (int)(ber[offset])
 			length = length*256 + (int)(ber[offset])
 			offset++
 		}
@@ -142,15 +148,16 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		if markerIndex == -1 {
 			return nil, 0, errors.New("ber2der: Invalid BER format")
 		}
-		fmt.Printf("--> Undefined Length Found: %d\n", length)
+		length = markerIndex
+		//fmt.Printf("--> (compute length) marker found at offset: %d\n", markerIndex+offset)
 	} else {
 		length = (int)(l)
 	}
+	//fmt.Printf("--> length        : %d\n", length)
 	contentEnd := offset + length
-	fmt.Printf("--> offset: %d\n", offset)
-	fmt.Printf("--> contentEnd: %d\n", contentEnd)
-	fmt.Printf("--> content: %x\n", ber[offset:contentEnd])
-	kind := b & 0x20
+	//fmt.Printf("--> content start : %d\n", offset)
+	//fmt.Printf("--> content end   : %d\n", contentEnd)
+	//fmt.Printf("--> content       : % X\n", ber[offset:contentEnd])
 	var obj asn1Object
 	if kind == 0 {
 		obj = asn1Primitive{
