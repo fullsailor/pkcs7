@@ -1,6 +1,7 @@
 package pkcs7
 
 import (
+	"bytes"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"fmt"
@@ -50,14 +51,29 @@ func TestVerify(t *testing.T) {
 }
 
 func TestBer2Der(t *testing.T) {
-	fmt.Printf("===\n%x\n===\n", Example2)
-	der, err := ber2der(Example2)
+	//Example1, _ := ioutil.ReadFile("test_example.p7")
+	fmt.Printf("===\n% X\n===\n", Example3)
+	der, err := ber2der(Example3)
 	if err != nil {
 		t.Fatalf("ber2der failed with error: %v", err)
 	}
-	_, err = Parse(der)
+	fmt.Printf("=== DER result ===\n% X\n===\n", der)
+
+	if der2, err := ber2der(der); err != nil {
+		t.Errorf("ber2der on DER bytes failed with error: %v", err)
+	} else {
+		if !bytes.Equal(der, der2) {
+			fmt.Printf("=== DER squared result ===\n% X\n===\n", der2)
+			t.Error("ber2der is not idempotent")
+		}
+	}
+
+	p7, err := Parse(der)
 	if err != nil {
 		t.Errorf("Could not parse resulting DER with error: %v", err)
+	}
+	if err = p7.Verify(); err != nil {
+		t.Skipf("Could not verify resulting DER with error: %v", err)
 	}
 }
 
