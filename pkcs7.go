@@ -90,9 +90,18 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 	for _, crl := range sd.CRLs {
 		fmt.Printf("CRLs: %v", crl)
 	}
-	var content unsignedData
 	fmt.Printf("--> Signed Data Version %d\n", sd.Version)
-	asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &content)
+
+	var contentBytes []byte
+	if sd.ContentInfo.Content.IsCompound {
+		var compound asn1.RawValue
+		asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound)
+		contentBytes = compound.Bytes
+	} else {
+		contentBytes = sd.ContentInfo.Content.Bytes
+	}
+	var content unsignedData
+	asn1.Unmarshal(contentBytes, &content)
 	return &PKCS7{
 		info:         info,
 		Content:      content,
