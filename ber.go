@@ -133,6 +133,7 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		fmt.Printf("--> length bytes: %x\n", ber[offset:offset+numberOfBytes])
 		for i := 0; i < numberOfBytes; i++ {
 			length = length*0xFF + (int)(ber[offset])
+			length = length*256 + (int)(ber[offset])
 			offset++
 		}
 	} else if l == 0x80 {
@@ -141,7 +142,6 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		if markerIndex == -1 {
 			return nil, 0, errors.New("ber2der: Invalid BER format")
 		}
-		length = markerIndex - offset
 		fmt.Printf("--> Undefined Length Found: %d\n", length)
 	} else {
 		length = (int)(l)
@@ -163,7 +163,7 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		for offset < contentEnd {
 			var subObj asn1Object
 			var err error
-			subObj, offset, err = readObject(ber, offset)
+			subObj, offset, err = readObject(ber[:contentEnd], offset)
 			if err != nil {
 				return nil, 0, err
 			}
