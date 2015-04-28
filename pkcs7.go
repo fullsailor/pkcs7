@@ -1,7 +1,13 @@
-package pkcs7 // import "fullsailor.com/pkcs7"
+package pkcs7
+
 import (
+	"bytes"
 	"crypto"
+	"crypto/cipher"
+	"crypto/des"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -15,17 +21,21 @@ import (
 // PKCS7 Represents a PKCS7 structure
 type PKCS7 struct {
 	Content      []byte
-	info         contentInfo
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList
 	Signers      []signerInfo
-	raw          signedData
+	raw          interface{}
 }
 
 type contentInfo struct {
 	ContentType asn1.ObjectIdentifier
-	Content     asn1.RawValue `asn1:"explicit,optional"`
+	Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
 }
+
+// ErrUnsupportedContentType is returned when a PKCS7 content is not supported.
+// Currently only Data (1.2.840.113549.1.7.1), Signed Data (1.2.840.113549.1.7.2),
+// and Enveloped Data are supported (1.2.840.113549.1.7.3)
+var ErrUnsupportedContentType = errors.New("pkcs7: cannot parse data: unimplemented content type")
 
 type unsignedData []byte
 
@@ -50,6 +60,25 @@ type signedData struct {
 	SignerInfos                []signerInfo           `asn1:"set"`
 }
 
+type envelopedData struct {
+	Version              int
+	RecipientInfos       []recipientInfo `asn1:"set"`
+	EncryptedContentInfo encryptedContentInfo
+}
+
+type recipientInfo struct {
+	Version                int
+	IssuerAndSerialNumber  issuerAndSerial
+	KeyEncryptionAlgorithm pkix.AlgorithmIdentifier
+	EncryptedKey           []byte
+}
+
+type encryptedContentInfo struct {
+	ContentType                asn1.ObjectIdentifier
+	ContentEncryptionAlgorithm pkix.AlgorithmIdentifier
+	EncryptedContent           asn1.RawValue `asn1:"tag:0,optional,explicit"`
+}
+
 type attribute struct {
 	Type  asn1.ObjectIdentifier
 	Value asn1.RawValue `asn1:"set"`
@@ -58,6 +87,17 @@ type attribute struct {
 type issuerAndSerial struct {
 	IssuerName   pkix.RDNSequence
 	SerialNumber *big.Int
+}
+
+// MessageDigestMismatchError is returned when the signer data digest does not
+// match the computed digest for the contained content
+type MessageDigestMismatchError struct {
+	ExpectedDigest []byte
+	ActualDigest   []byte
+}
+
+func (err *MessageDigestMismatchError) Error() string {
+	return fmt.Sprintf("pkcs7: Message digest mismatch\n\tExpected: %X\n\tActual  : %X", err.ExpectedDigest, err.ActualDigest)
 }
 
 type signerInfo struct {
@@ -73,7 +113,11 @@ type signerInfo struct {
 // Parse decodes a DER encoded PKCS7 package
 func Parse(data []byte) (p7 *PKCS7, err error) {
 	var info contentInfo
-	rest, err := asn1.Unmarshal(data, &info)
+	der, err := ber2der(data)
+	if err != nil {
+		return nil, err
+	}
+	rest, err := asn1.Unmarshal(der, &info)
 	if len(rest) > 0 {
 		err = asn1.SyntaxError{Msg: "trailing data"}
 		return
@@ -81,34 +125,59 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 	if err != nil {
 		return
 	}
+
+	fmt.Printf("--> Content Type: %s", info.ContentType)
+	switch {
+	case info.ContentType.Equal(oidSignedData):
+		return parseSignedData(info.Content.Bytes)
+	case info.ContentType.Equal(oidEnvelopedData):
+		return parseEnvelopedData(info.Content.Bytes)
+	}
+	return nil, ErrUnsupportedContentType
+}
+
+func parseSignedData(data []byte) (*PKCS7, error) {
 	var sd signedData
-	asn1.Unmarshal(info.Content.Bytes, &sd)
+	asn1.Unmarshal(data, &sd)
 	certs, err := x509.ParseCertificates(sd.Certificates.Bytes)
 	if err != nil {
-		return
+		return nil, err
 	}
 	for _, crl := range sd.CRLs {
 		fmt.Printf("CRLs: %v", crl)
 	}
 	fmt.Printf("--> Signed Data Version %d\n", sd.Version)
 
-	var contentBytes []byte
-	if sd.ContentInfo.Content.IsCompound {
-		var compound asn1.RawValue
-		asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound)
-		contentBytes = compound.Bytes
-	} else {
-		contentBytes = sd.ContentInfo.Content.Bytes
-	}
+	var compound asn1.RawValue
 	var content unsignedData
-	asn1.Unmarshal(contentBytes, &content)
+	if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
+		return nil, err
+	}
+	// Compound octet string
+	if compound.IsCompound {
+		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
+			return nil, err
+		}
+	} else {
+		// assuming this is tag 04
+		content = compound.Bytes
+	}
 	return &PKCS7{
-		info:         info,
 		Content:      content,
 		Certificates: certs,
 		CRLs:         sd.CRLs,
 		Signers:      sd.SignerInfos,
 		raw:          sd}, nil
+}
+
+func parseEnvelopedData(data []byte) (*PKCS7, error) {
+	var ed envelopedData
+	if _, err := asn1.Unmarshal(data, &ed); err != nil {
+		return nil, err
+	}
+	return &PKCS7{
+		raw: ed,
+	}, nil
 }
 
 type digestInfo struct {
@@ -132,17 +201,20 @@ func (p7 *PKCS7) Verify() (err error) {
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	fmt.Printf("--> Signer Info Version: %d\n", signer.Version)
 	if len(signer.AuthenticatedAttributes) > 0 {
-
 		// TODO(fullsailor): First check the content type match
 		digest, err := getDigestFromAttributes(signer.AuthenticatedAttributes)
 		if err != nil {
 			return err
 		}
 		h := crypto.SHA1.New()
+		fmt.Printf("--> Content to Digest:\n %s", p7.Content)
 		h.Write(p7.Content)
 		computed := h.Sum(nil)
 		if !hmac.Equal(digest, computed) {
-			return errors.New("pkcs7: Message digest mismatch")
+			return &MessageDigestMismatchError{
+				ExpectedDigest: digest,
+				ActualDigest:   computed,
+			}
 		}
 	}
 	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
@@ -157,8 +229,11 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return err
 	}
 	encodedAttributes = encodedAttributes[3:] // Remove the leading sequence octets
+
+	fmt.Printf("--> asn.1 attributes %x\n", encodedAttributes)
 	/*
-		fmt.Printf("--> asn.1 attributes %x\n", encodedAttributes)
+		h := crypto.SHA1.New()
+		h.Write(p7.raw.ContentInfo.Content.Bytes)
 		h.Write(encodedAttributes)
 		messageDigest := h.Sum(nil)
 		di := digestInfo{
@@ -193,10 +268,83 @@ func getDigestFromAttributes(attributes []attribute) (digest []byte, err error) 
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
 	for _, cert := range certs {
-		if cert.SerialNumber.Cmp(ias.SerialNumber) == 0 {
-			// TODO(fullsailor): Compare Issuer Name & Cert Subject
+		if isCertMatchForIssuerAndSerial(cert, ias) {
 			return cert
 		}
 	}
 	return nil
+}
+
+// ErrUnsupportedAlgorithm tells you when our quick dev assumptions have failed
+var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA & DES supported")
+
+// ErrNotEncryptedContent is returned when attempting to Decrypt data that is not encrypted data
+var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
+
+// Decrypt decrypts encrypted content info for recipient cert and private key
+func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, error) {
+	data, ok := p7.raw.(envelopedData)
+	if !ok {
+		return nil, ErrNotEncryptedContent
+	}
+	recipient := selectRecipientForCertificate(data.RecipientInfos, cert)
+	if recipient.EncryptedKey == nil {
+		return nil, errors.New("pkcs7: no enveloped recipient for provided certificate")
+	}
+	if priv := pk.(*rsa.PrivateKey); priv != nil {
+		var contentKey []byte
+		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, priv, recipient.EncryptedKey)
+		if err != nil {
+			return nil, err
+		}
+		return data.EncryptedContentInfo.decrypt(contentKey)
+	}
+	return nil, ErrUnsupportedAlgorithm
+}
+
+var oidEncryptionAlgorithmDESCBC = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
+
+func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
+	if !eci.ContentEncryptionAlgorithm.Algorithm.Equal(oidEncryptionAlgorithmDESCBC) {
+		return nil, ErrUnsupportedAlgorithm
+	}
+	block, err := des.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	cypherbytes := eci.EncryptedContent.Bytes
+	for {
+		var part []byte
+		cypherbytes, err = asn1.Unmarshal(cypherbytes, &part)
+		buf.Write(part)
+		if cypherbytes == nil {
+			break
+		}
+	}
+	cyphertext := buf.Bytes()
+
+	iv := eci.ContentEncryptionAlgorithm.Parameters.Bytes
+	if len(iv) != 8 {
+		return nil, errors.New("pkcs7: encryption algorithm parameters are malformed")
+	}
+	mode := cipher.NewCBCDecrypter(block, iv)
+	plaintext := make([]byte, len(cyphertext))
+	mode.CryptBlocks(plaintext, cyphertext)
+
+	return plaintext, nil
+}
+
+func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certificate) recipientInfo {
+	for _, recp := range recipients {
+		if isCertMatchForIssuerAndSerial(cert, recp.IssuerAndSerialNumber) {
+			return recp
+		}
+	}
+	return recipientInfo{}
+}
+
+func isCertMatchForIssuerAndSerial(cert *x509.Certificate, ias issuerAndSerial) bool {
+	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0
+	// TODO(fullsailor): Compare Issuer Name & Cert Subject
 }
