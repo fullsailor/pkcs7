@@ -384,6 +384,148 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 
 	return data[:len(data)-padlen], nil
 }
+// SignedData is an opaque data structure for creating signed data payloads
+type SignedData struct {
+	sd            signedData
+	certs         []*x509.Certificate
+	messageDigest []byte
+}
+
+// Attribute represents a key value pair attribute. Value must be marshalable byte
+// `encoding/asn1`
+type Attribute struct {
+	Type  asn1.ObjectIdentifier
+	Value interface{}
+}
+
+// SignerInfoConfig are optional values to include when adding a signer
+type SignerInfoConfig struct {
+	ExtraSignedAttributes []Attribute
+}
+
+// NewSignedData initializes a SignedData with content
+func NewSignedData(data []byte) (*SignedData, error) {
+	content, err := asn1.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	ci := contentInfo{
+		ContentType: oidData,
+		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
+	}
+	digAlg := pkix.AlgorithmIdentifier{
+		Algorithm: oidDigestAlgorithmSHA1,
+	}
+	h := crypto.SHA1.New()
+	h.Write(data)
+	md := h.Sum(nil)
+	sd := signedData{
+		ContentInfo:                ci,
+		Version:                    1,
+		DigestAlgorithmIdentifiers: []pkix.AlgorithmIdentifier{digAlg},
+	}
+	return &SignedData{sd: sd, messageDigest: md}, nil
+}
+
+type attributes struct {
+	types  []asn1.ObjectIdentifier
+	values []interface{}
+}
+
+// Add adds the attribute, maintaining insertion order
+func (attrs *attributes) Add(attrType asn1.ObjectIdentifier, value interface{}) {
+	attrs.types = append(attrs.types, attrType)
+	attrs.values = append(attrs.values, value)
+}
+
+func (attrs *attributes) ForMarshaling() ([]attribute, error) {
+	results := make([]attribute, len(attrs.types))
+	for i := range results {
+		attrType := attrs.types[i]
+		attrValue := attrs.values[i]
+		asn1Value, err := asn1.Marshal(attrValue)
+		if err != nil {
+			return nil, err
+		}
+		results[i] = attribute{
+			Type:  attrType,
+			Value: asn1.RawValue{Tag: 17, IsCompound: true, Bytes: asn1Value}, // 17 == SET tag
+		}
+	}
+	return results, nil
+}
+
+// AddSigner signs attributes about the content and adds certificate to payload
+func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, config SignerInfoConfig) error {
+	attrs := &attributes{}
+	attrs.Add(oidAttributeContentType, sd.sd.ContentInfo.ContentType)
+	attrs.Add(oidAttributeMessageDigest, sd.messageDigest)
+	for _, attr := range config.ExtraSignedAttributes {
+		attrs.Add(attr.Type, attr.Value)
+	}
+	finalAttrs, err := attrs.ForMarshaling()
+	if err != nil {
+		return err
+	}
+	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA1)
+	if err != nil {
+		return err
+	}
+	signer := signerInfo{
+		AuthenticatedAttributes:   finalAttrs,
+		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
+		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		IssuerAndSerialNumber:     issuerAndSerial{IssuerName: cert.Subject.ToRDNSequence(), SerialNumber: cert.SerialNumber},
+		EncryptedDigest:           signature,
+		Version:                   1,
+	}
+	// create signature of signed attributes
+	sd.certs = append(sd.certs, cert)
+	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
+	return nil
+}
+
+// Finish marshals the content and its signers
+func (sd *SignedData) Finish() ([]byte, error) {
+	sd.sd.Certificates = marshalCertificates(sd.certs)
+	inner, err := asn1.Marshal(sd.sd)
+	if err != nil {
+		return nil, err
+	}
+	outer := contentInfo{
+		ContentType: oidSignedData,
+		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: inner, IsCompound: true},
+	}
+	return asn1.Marshal(outer)
+}
+
+// signs the DER encoded form of the attributes with the private key
+func signAttributes(attrs []attribute, pkey crypto.PrivateKey, hash crypto.Hash) ([]byte, error) {
+	attrBytes, err := marshalAttributes(attrs)
+	if err != nil {
+		return nil, err
+	}
+	h := hash.New()
+	h.Write(attrBytes)
+	hashed := h.Sum(nil)
+	switch priv := pkey.(type) {
+	case *rsa.PrivateKey:
+		return rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA1, hashed)
+	}
+	return nil, ErrUnsupportedAlgorithm
+}
+
+// concats and wraps the certificates in the RawValue structure
+func marshalCertificates(certs []*x509.Certificate) asn1.RawValue {
+	var buf bytes.Buffer
+	for _, cert := range certs {
+		buf.Write(cert.Raw)
+	}
+	return asn1.RawValue{Class: 2, Tag: 0, Bytes: buf.Bytes(), IsCompound: true}
+}
+
+// DegenerateCertificate creates a signed data structure containing only the
+// provided certificate
 func DegenerateCertificate(cert []byte) ([]byte, error) {
 	certs := asn1.RawValue{Class: 2, Tag: 0, Bytes: cert, IsCompound: true}
 	emptyContent := contentInfo{ContentType: oidData}
