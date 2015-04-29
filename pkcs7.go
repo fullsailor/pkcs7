@@ -331,7 +331,9 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	mode := cipher.NewCBCDecrypter(block, iv)
 	plaintext := make([]byte, len(cyphertext))
 	mode.CryptBlocks(plaintext, cyphertext)
-
+	if plaintext, err = unpad(plaintext, mode.BlockSize()); err != nil {
+		return nil, err
+	}
 	return plaintext, nil
 }
 
@@ -347,4 +349,38 @@ func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certif
 func isCertMatchForIssuerAndSerial(cert *x509.Certificate, ias issuerAndSerial) bool {
 	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0
 	// TODO(fullsailor): Compare Issuer Name & Cert Subject
+}
+
+func pad(data []byte, blocklen int) ([]byte, error) {
+	if blocklen < 1 {
+		return nil, fmt.Errorf("invalid blocklen %d", blocklen)
+	}
+	padlen := blocklen - (len(data) % blocklen)
+	if padlen == 0 {
+		padlen = blocklen
+	}
+	pad := bytes.Repeat([]byte{byte(padlen)}, padlen)
+	return append(data, pad...), nil
+}
+
+func unpad(data []byte, blocklen int) ([]byte, error) {
+	if blocklen < 1 {
+		return nil, fmt.Errorf("invalid blocklen %d", blocklen)
+	}
+	if len(data)%blocklen != 0 || len(data) == 0 {
+		return nil, fmt.Errorf("invalid data len %d", len(data))
+	}
+
+	// the last byte is the length of padding
+	padlen := int(data[len(data)-1])
+
+	// check padding integrity, all bytes should be the same
+	pad := data[len(data)-padlen:]
+	for _, padbyte := range pad {
+		if padbyte != byte(padlen) {
+			return nil, errors.New("invalid padding")
+		}
+	}
+
+	return data[:len(data)-padlen], nil
 }
