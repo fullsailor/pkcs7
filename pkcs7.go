@@ -384,3 +384,21 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 
 	return data[:len(data)-padlen], nil
 }
+func DegenerateCertificate(cert []byte) ([]byte, error) {
+	certs := asn1.RawValue{Class: 2, Tag: 0, Bytes: cert, IsCompound: true}
+	emptyContent := contentInfo{ContentType: oidData}
+	sd := signedData{
+		Version:      1,
+		ContentInfo:  emptyContent,
+		Certificates: certs,
+	}
+	content, err := asn1.Marshal(sd)
+	if err != nil {
+		return nil, err
+	}
+	signedContent := contentInfo{
+		ContentType: oidSignedData,
+		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
+	}
+	return asn1.Marshal(signedContent)
+}
