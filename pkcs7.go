@@ -363,6 +363,10 @@ func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certif
 }
 
 func isCertMatchForIssuerAndSerial(cert *x509.Certificate, ias issuerAndSerial) bool {
+	// TODO(fullsailor): openssl's implementation of comparing issuer names compares
+	// the DER encoding of both for exact byte match. Which is much stricter than
+	// what we have here. This would require marshalling ias.IssuerName and comparing
+	// with cert.RawIssuer using bytes.Compare
 	issuer := new(pkix.Name)
 	issuer.FillFromRDNSequence(&ias.IssuerName)
 	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0 && issuer.CommonName == cert.Issuer.CommonName
@@ -509,11 +513,17 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	if err != nil {
 		return err
 	}
+
+	ias, err := cert2issuerAndSerial(cert)
+	if err != nil {
+		return err
+	}
+
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
 		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
-		IssuerAndSerialNumber:     issuerAndSerial{IssuerName: cert.Issuer.ToRDNSequence(), SerialNumber: cert.SerialNumber},
+		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
 	}
@@ -540,6 +550,22 @@ func (sd *SignedData) Finish() ([]byte, error) {
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: inner, IsCompound: true},
 	}
 	return asn1.Marshal(outer)
+}
+
+func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
+	var ias issuerAndSerial
+	// The issuer RDNSequence has to match exactly the sequence in the certificate
+	// We cannot use cert.Issuer.ToRDNSequence() here since it mangles the sequence
+	var issuer pkix.RDNSequence
+	if extra, err := asn1.Unmarshal(cert.RawIssuer, &issuer); err != nil {
+		return ias, err
+	} else if len(extra) > 0 {
+		return ias, errors.New("pkcs7: extra data remains after parsing certificate issuer")
+	}
+	ias.IssuerName = issuer
+	ias.SerialNumber = cert.SerialNumber
+
+	return ias, nil
 }
 
 // signs the DER encoded form of the attributes with the private key
@@ -633,12 +659,13 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		ias, err := cert2issuerAndSerial(recipient)
+		if err != nil {
+			return nil, err
+		}
 		info := recipientInfo{
-			Version: 0,
-			IssuerAndSerialNumber: issuerAndSerial{
-				IssuerName:   recipient.Issuer.ToRDNSequence(),
-				SerialNumber: recipient.SerialNumber,
-			},
+			Version:               0,
+			IssuerAndSerialNumber: ias,
 			KeyEncryptionAlgorithm: pkix.AlgorithmIdentifier{
 				Algorithm: oidEncryptionAlgorithmRSA,
 			},
