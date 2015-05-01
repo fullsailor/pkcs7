@@ -215,6 +215,27 @@ func TestUnmarshalSignedAttribute(t *testing.T) {
 	}
 }
 
+func TestPad(t *testing.T) {
+	tests := []struct {
+		Original  []byte
+		Expected  []byte
+		BlockSize int
+	}{
+		{[]byte{0x1, 0x2, 0x3, 0x10}, []byte{0x1, 0x2, 0x3, 0x10, 0x4, 0x4, 0x4, 0x4}, 8},
+		{[]byte{0x1, 0x2, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0}, []byte{0x1, 0x2, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8}, 8},
+	}
+	for _, test := range tests {
+		padded, err := pad(test.Original, test.BlockSize)
+		if err != nil {
+			t.Errorf("pad encountered error: %s", err)
+			continue
+		}
+		if bytes.Compare(test.Expected, padded) != 0 {
+			t.Errorf("pad results mismatch:\n\tExpected: %X\n\tActual: %X", test.Expected, padded)
+		}
+	}
+}
+
 func createTestCertificate() (tls.Certificate, error) {
 	signer, err := createTestCertificateByIssuer("Eddard Stark", nil)
 	if err != nil {
