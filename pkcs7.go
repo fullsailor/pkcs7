@@ -55,8 +55,8 @@ type signedData struct {
 	Version                    int                        `asn1:"default:1"`
 	DigestAlgorithmIdentifiers []pkix.AlgorithmIdentifier `asn1:"set"`
 	ContentInfo                contentInfo
-	Certificates               asn1.RawValue          `asn1:"optional"`
-	CRLs                       []pkix.CertificateList `asn1:"optional"`
+	Certificates               asn1.RawValue          `asn1:"optional,tag:0"`
+	CRLs                       []pkix.CertificateList `asn1:"optional,tag:1"`
 	SignerInfos                []signerInfo           `asn1:"set"`
 }
 
@@ -199,7 +199,6 @@ func (p7 *PKCS7) Verify() (err error) {
 }
 
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
-	fmt.Printf("--> Signer Info Version: %d\n", signer.Version)
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
 		digest, err := getDigestFromAttributes(signer.AuthenticatedAttributes)
@@ -207,7 +206,6 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 			return err
 		}
 		h := crypto.SHA1.New()
-		fmt.Printf("--> Content to Digest:\n %s", p7.Content)
 		h.Write(p7.Content)
 		computed := h.Sum(nil)
 		if !hmac.Equal(digest, computed) {
@@ -221,16 +219,10 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if cert == nil {
 		return errors.New("pkcs7: No certificate for signer")
 	}
-
-	encodedAttributes, err := asn1.Marshal(struct {
-		A []attribute `asn1:"set"`
-	}{A: signer.AuthenticatedAttributes})
+	encodedAttributes, err := marshalAttributes(signer.AuthenticatedAttributes)
 	if err != nil {
 		return err
 	}
-	encodedAttributes = encodedAttributes[3:] // Remove the leading sequence octets
-
-	fmt.Printf("--> asn.1 attributes %x\n", encodedAttributes)
 	/*
 		h := crypto.SHA1.New()
 		h.Write(p7.raw.ContentInfo.Content.Bytes)
@@ -249,6 +241,20 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	*/
 	algo := x509.SHA1WithRSA
 	return cert.CheckSignature(algo, encodedAttributes, signer.EncryptedDigest)
+}
+
+func marshalAttributes(attrs []attribute) ([]byte, error) {
+	encodedAttributes, err := asn1.Marshal(struct {
+		A []attribute `asn1:"set"`
+	}{A: attrs})
+	if err != nil {
+		return nil, err
+	}
+
+	// Remove the leading sequence octets
+	var raw asn1.RawValue
+	asn1.Unmarshal(encodedAttributes, &raw)
+	return raw.Bytes, nil
 }
 
 var (
@@ -273,6 +279,16 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 		}
 	}
 	return nil
+}
+
+// GetOnlySigner returns an x509.Certificate for the first signer of the signed
+// data payload. If there are more or less than one signer, nil is returned
+func (p7 *PKCS7) GetOnlySigner() *x509.Certificate {
+	if len(p7.Signers) != 1 {
+		return nil
+	}
+	signer := p7.Signers[0]
+	return getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
 }
 
 // ErrUnsupportedAlgorithm tells you when our quick dev assumptions have failed
@@ -347,8 +363,9 @@ func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certif
 }
 
 func isCertMatchForIssuerAndSerial(cert *x509.Certificate, ias issuerAndSerial) bool {
-	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0
-	// TODO(fullsailor): Compare Issuer Name & Cert Subject
+	issuer := new(pkix.Name)
+	issuer.FillFromRDNSequence(&ias.IssuerName)
+	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0 && issuer.CommonName == cert.Issuer.CommonName
 }
 
 func pad(data []byte, blocklen int) ([]byte, error) {
@@ -384,6 +401,27 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 
 	return data[:len(data)-padlen], nil
 }
+
+// UnmarshalSignedAttribute decodes a single attribute from the signer info
+func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, out interface{}) error {
+	sd, ok := p7.raw.(signedData)
+	if !ok {
+		return errors.New("pkcs7: payload is not signedData content")
+	}
+	if len(sd.SignerInfos) < 1 {
+		return errors.New("pkcs7: payload has no signers")
+	}
+	attributes := sd.SignerInfos[0].AuthenticatedAttributes
+
+	for _, attr := range attributes {
+		if attr.Type.Equal(attributeType) {
+			_, err := asn1.Unmarshal(attr.Value.Bytes, out)
+			return err
+		}
+	}
+	return errors.New("pkcs7: attribute type not in signed attributes")
+}
+
 // SignedData is an opaque data structure for creating signed data payloads
 type SignedData struct {
 	sd            signedData
@@ -475,7 +513,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 		AuthenticatedAttributes:   finalAttrs,
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
 		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
-		IssuerAndSerialNumber:     issuerAndSerial{IssuerName: cert.Subject.ToRDNSequence(), SerialNumber: cert.SerialNumber},
+		IssuerAndSerialNumber:     issuerAndSerial{IssuerName: cert.Issuer.ToRDNSequence(), SerialNumber: cert.SerialNumber},
 		EncryptedDigest:           signature,
 		Version:                   1,
 	}
@@ -483,6 +521,11 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	sd.certs = append(sd.certs, cert)
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
 	return nil
+}
+
+// AddCertificate adds the certificate to the payload. Useful for parent certificates
+func (sd *SignedData) AddCertificate(cert *x509.Certificate) {
+	sd.certs = append(sd.certs, cert)
 }
 
 // Finish marshals the content and its signers
@@ -533,6 +576,7 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 		Version:      1,
 		ContentInfo:  emptyContent,
 		Certificates: certs,
+		CRLs:         []pkix.CertificateList{},
 	}
 	content, err := asn1.Marshal(sd)
 	if err != nil {
@@ -543,4 +587,94 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
 	}
 	return asn1.Marshal(signedContent)
+}
+
+// Encrypt creates and returns an envelope data PKCS7 structure with encrypted
+// recipient keys for each recipient public key
+// TODO(fullsailor): Add support for encrypting content with other algorithms
+func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
+
+	// Create DES key & CBC IV
+	key := make([]byte, 8)
+	iv := make([]byte, des.BlockSize)
+	_, err := rand.Read(key)
+	if err != nil {
+		return nil, err
+	}
+	_, err = rand.Read(iv)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encrypt padded content
+	block, err := des.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	mode := cipher.NewCBCEncrypter(block, iv)
+	plaintext, err := pad(content, mode.BlockSize())
+	cyphertext := make([]byte, len(plaintext))
+	mode.CryptBlocks(cyphertext, plaintext)
+
+	// Prepare ASN.1 Encrypted Content Info
+	eci := encryptedContentInfo{
+		ContentType: oidData,
+		ContentEncryptionAlgorithm: pkix.AlgorithmIdentifier{
+			Algorithm:  oidEncryptionAlgorithmDESCBC,
+			Parameters: asn1.RawValue{Tag: 4, Bytes: iv},
+		},
+		EncryptedContent: marshalEncryptedContent(cyphertext),
+	}
+
+	// Prepare each recipient's encrypted cipher key
+	recipientInfos := make([]recipientInfo, len(recipients))
+	for i, recipient := range recipients {
+		encrypted, err := encryptKey(key, recipient)
+		if err != nil {
+			return nil, err
+		}
+		info := recipientInfo{
+			Version: 0,
+			IssuerAndSerialNumber: issuerAndSerial{
+				IssuerName:   recipient.Issuer.ToRDNSequence(),
+				SerialNumber: recipient.SerialNumber,
+			},
+			KeyEncryptionAlgorithm: pkix.AlgorithmIdentifier{
+				Algorithm: oidEncryptionAlgorithmRSA,
+			},
+			EncryptedKey: encrypted,
+		}
+		recipientInfos[i] = info
+	}
+
+	// Prepare envelope content
+	envelope := envelopedData{
+		EncryptedContentInfo: eci,
+		Version:              0,
+		RecipientInfos:       recipientInfos,
+	}
+	innerContent, err := asn1.Marshal(envelope)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare outer payload structure
+	wrapper := contentInfo{
+		ContentType: oidEnvelopedData,
+		Content:     asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: innerContent},
+	}
+
+	return asn1.Marshal(wrapper)
+}
+
+func marshalEncryptedContent(content []byte) asn1.RawValue {
+	asn1Content, _ := asn1.Marshal(content)
+	return asn1.RawValue{Tag: 0, Class: 2, Bytes: asn1Content}
+}
+
+func encryptKey(key []byte, recipient *x509.Certificate) ([]byte, error) {
+	if pub := recipient.PublicKey.(*rsa.PublicKey); pub != nil {
+		return rsa.EncryptPKCS1v15(rand.Reader, pub, key)
+	}
+	return nil, ErrUnsupportedAlgorithm
 }

@@ -2,11 +2,13 @@ package pkcs7
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -153,32 +155,107 @@ func TestSign(t *testing.T) {
 	if bytes.Compare(content, p7.Content) != 0 {
 		t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
 	}
-	if p7.Verify(); err != nil {
+	if err := p7.Verify(); err != nil {
 		t.Errorf("Cannot verify our signed data: %s", err)
 	}
 }
 
+func TestEncrypt(t *testing.T) {
+	plaintext := []byte("Hello Secret World!")
+	cert, err := createTestCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := Encrypt(plaintext, []*x509.Certificate{cert.Leaf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p7, err := Parse(encrypted)
+	if err != nil {
+		t.Fatalf("cannot Parse encrypted result: %s", err)
+	}
+	result, err := p7.Decrypt(cert.Leaf, cert.PrivateKey)
+	if err != nil {
+		t.Fatalf("cannot Decrypt encrypted result: %s", err)
+	}
+	if bytes.Compare(plaintext, result) != 0 {
+		t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+	}
+}
+
+func TestUnmarshalSignedAttribute(t *testing.T) {
+	cert, err := createTestCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("Hello World")
+	toBeSigned, err := NewSignedData(content)
+	if err != nil {
+		t.Fatalf("Cannot initialize signed data: %s", err)
+	}
+	oidTest := asn1.ObjectIdentifier{2, 3, 4, 5, 6, 7}
+	testValue := "TestValue"
+	if err := toBeSigned.AddSigner(cert.Leaf, cert.PrivateKey, SignerInfoConfig{
+		ExtraSignedAttributes: []Attribute{Attribute{Type: oidTest, Value: testValue}},
+	}); err != nil {
+		t.Fatalf("Cannot add signer: %s", err)
+	}
+	signed, err := toBeSigned.Finish()
+	if err != nil {
+		t.Fatalf("Cannot finish signing data: %s", err)
+	}
+	p7, err := Parse(signed)
+	var actual string
+	err = p7.UnmarshalSignedAttribute(oidTest, &actual)
+	if err != nil {
+		t.Fatalf("Cannot unmarshal test value: %s", err)
+	}
+	if testValue != actual {
+		t.Errorf("Attribute does not match test value\n\tExpected: %s\n\tActual: %s", testValue, actual)
+	}
+}
+
 func createTestCertificate() (tls.Certificate, error) {
+	signer, err := createTestCertificateByIssuer("Eddard Stark", nil)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return createTestCertificateByIssuer("Jon Snow", &signer)
+}
+
+func createTestCertificateByIssuer(name string, issuer *tls.Certificate) (tls.Certificate, error) {
+
 	priv, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 32)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+
 	template := x509.Certificate{
 		SerialNumber:       serialNumber,
 		SignatureAlgorithm: x509.SHA256WithRSA,
 		Subject: pkix.Name{
+			CommonName:   name,
 			Organization: []string{"Acme Co"},
 		},
 		NotBefore: time.Now(),
 		NotAfter:  time.Now().AddDate(1, 0, 0),
 		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 	}
-	cert, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
+	var issuerCert *x509.Certificate
+	var issuerKey crypto.PrivateKey
+	if issuer != nil {
+		issuerCert = issuer.Leaf
+		issuerKey = issuer.PrivateKey
+	} else {
+		issuerCert = &template
+		issuerKey = priv
+	}
+	cert, err := x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.Public(), issuerKey)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
