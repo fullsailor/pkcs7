@@ -696,7 +696,7 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 
 func marshalEncryptedContent(content []byte) asn1.RawValue {
 	asn1Content, _ := asn1.Marshal(content)
-	return asn1.RawValue{Tag: 0, Class: 2, Bytes: asn1Content}
+	return asn1.RawValue{Tag: 0, Class: 2, Bytes: asn1Content, IsCompound: true}
 }
 
 func encryptKey(key []byte, recipient *x509.Certificate) ([]byte, error) {
