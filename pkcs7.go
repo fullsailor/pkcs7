@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 
 	_ "crypto/sha1" // for crypto.SHA1
 )
@@ -503,21 +504,57 @@ func (attrs *attributes) Add(attrType asn1.ObjectIdentifier, value interface{}) 
 	attrs.values = append(attrs.values, value)
 }
 
+type sortableAttribute struct {
+	SortKey   []byte
+	Attribute attribute
+}
+
+type attributeSet []sortableAttribute
+
+func (sa attributeSet) Len() int {
+	return len(sa)
+}
+
+func (sa attributeSet) Less(i, j int) bool {
+	return bytes.Compare(sa[i].SortKey, sa[j].SortKey) < 0
+}
+
+func (sa attributeSet) Swap(i, j int) {
+	sa[i], sa[j] = sa[j], sa[i]
+}
+
+func (sa attributeSet) Attributes() []attribute {
+	attrs := make([]attribute, len(sa))
+	for i, attr := range sa {
+		attrs[i] = attr.Attribute
+	}
+	return attrs
+}
+
 func (attrs *attributes) ForMarshaling() ([]attribute, error) {
-	results := make([]attribute, len(attrs.types))
-	for i := range results {
+	sortables := make(attributeSet, len(attrs.types))
+	for i := range sortables {
 		attrType := attrs.types[i]
 		attrValue := attrs.values[i]
 		asn1Value, err := asn1.Marshal(attrValue)
 		if err != nil {
 			return nil, err
 		}
-		results[i] = attribute{
+		attr := attribute{
 			Type:  attrType,
 			Value: asn1.RawValue{Tag: 17, IsCompound: true, Bytes: asn1Value}, // 17 == SET tag
 		}
+		encoded, err := asn1.Marshal(attr)
+		if err != nil {
+			return nil, err
+		}
+		sortables[i] = sortableAttribute{
+			SortKey:   encoded,
+			Attribute: attr,
+		}
 	}
-	return results, nil
+	sort.Sort(sortables)
+	return sortables.Attributes(), nil
 }
 
 // AddSigner signs attributes about the content and adds certificate to payload
