@@ -292,7 +292,7 @@ func (p7 *PKCS7) GetOnlySigner() *x509.Certificate {
 }
 
 // ErrUnsupportedAlgorithm tells you when our quick dev assumptions have failed
-var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA & DES supported")
+var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, DES, & DES-EDE3 supported")
 
 // ErrNotEncryptedContent is returned when attempting to Decrypt data that is not encrypted data
 var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
@@ -315,30 +315,53 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 		}
 		return data.EncryptedContentInfo.decrypt(contentKey)
 	}
+	fmt.Printf("Unsupported Private Key: %v\n", pk)
 	return nil, ErrUnsupportedAlgorithm
 }
 
 var oidEncryptionAlgorithmDESCBC = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
+var oidEncryptionAlgorithmDESEDE3CBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
 
 func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
-	if !eci.ContentEncryptionAlgorithm.Algorithm.Equal(oidEncryptionAlgorithmDESCBC) {
+	alg := eci.ContentEncryptionAlgorithm.Algorithm
+	if !alg.Equal(oidEncryptionAlgorithmDESCBC) && !alg.Equal(oidEncryptionAlgorithmDESEDE3CBC) {
+		fmt.Printf("Unsupported Content Encryption Algorithm: %s\n", alg)
 		return nil, ErrUnsupportedAlgorithm
 	}
-	block, err := des.NewCipher(key)
+
+	// EncryptedContent can either be constructed of multple OCTET STRINGs
+	// or _be_ a tagged OCTET STRING
+	var cyphertext []byte
+	if eci.EncryptedContent.IsCompound {
+		// Complex case to concat all of the children OCTET STRINGs
+		var buf bytes.Buffer
+		cypherbytes := eci.EncryptedContent.Bytes
+		for {
+			var part []byte
+			cypherbytes, _ = asn1.Unmarshal(cypherbytes, &part)
+			buf.Write(part)
+			if cypherbytes == nil {
+				break
+			}
+		}
+		cyphertext = buf.Bytes()
+	} else {
+		// Simple case, the bytes _are_ the cyphertext
+		cyphertext = eci.EncryptedContent.Bytes
+	}
+
+	var block cipher.Block
+	var err error
+
+	switch {
+	case alg.Equal(oidEncryptionAlgorithmDESCBC):
+		block, err = des.NewCipher(key)
+	case alg.Equal(oidEncryptionAlgorithmDESEDE3CBC):
+		block, err = des.NewTripleDESCipher(key)
+	}
 	if err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	cypherbytes := eci.EncryptedContent.Bytes
-	for {
-		var part []byte
-		cypherbytes, err = asn1.Unmarshal(cypherbytes, &part)
-		buf.Write(part)
-		if cypherbytes == nil {
-			break
-		}
-	}
-	cyphertext := buf.Bytes()
 
 	iv := eci.ContentEncryptionAlgorithm.Parameters.Bytes
 	if len(iv) != 8 {
