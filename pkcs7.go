@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"time"
 
 	_ "crypto/sha1" // for crypto.SHA1
 )
@@ -556,6 +557,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	attrs := &attributes{}
 	attrs.Add(oidAttributeContentType, sd.sd.ContentInfo.ContentType)
 	attrs.Add(oidAttributeMessageDigest, sd.messageDigest)
+	attrs.Add(oidAttributeSigningTime, time.Now())
 	for _, attr := range config.ExtraSignedAttributes {
 		attrs.Add(attr.Type, attr.Value)
 	}
