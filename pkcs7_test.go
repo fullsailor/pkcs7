@@ -53,7 +53,7 @@ func TestBer2Der(t *testing.T) {
 		t.Errorf("Could not parse resulting DER with error: %v", err)
 	}
 	if err = p7.Verify(); err != nil {
-		t.Skipf("Could not verify resulting DER with error: %v", err)
+		t.Errorf("Could not verify resulting DER with error: %v", err)
 	}
 }
 
