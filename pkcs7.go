@@ -86,7 +86,7 @@ type attribute struct {
 }
 
 type issuerAndSerial struct {
-	IssuerName   pkix.RDNSequence
+	IssuerName   asn1.RawValue
 	SerialNumber *big.Int
 }
 
@@ -387,13 +387,7 @@ func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certif
 }
 
 func isCertMatchForIssuerAndSerial(cert *x509.Certificate, ias issuerAndSerial) bool {
-	// TODO(fullsailor): openssl's implementation of comparing issuer names compares
-	// the DER encoding of both for exact byte match. Which is much stricter than
-	// what we have here. This would require marshalling ias.IssuerName and comparing
-	// with cert.RawIssuer using bytes.Compare
-	issuer := new(pkix.Name)
-	issuer.FillFromRDNSequence(&ias.IssuerName)
-	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0 && issuer.CommonName == cert.Issuer.CommonName
+	return cert.SerialNumber.Cmp(ias.SerialNumber) == 0 && bytes.Compare(cert.RawIssuer, ias.IssuerName.FullBytes) == 0
 }
 
 func pad(data []byte, blocklen int) ([]byte, error) {
@@ -616,13 +610,7 @@ func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 	var ias issuerAndSerial
 	// The issuer RDNSequence has to match exactly the sequence in the certificate
 	// We cannot use cert.Issuer.ToRDNSequence() here since it mangles the sequence
-	var issuer pkix.RDNSequence
-	if extra, err := asn1.Unmarshal(cert.RawIssuer, &issuer); err != nil {
-		return ias, err
-	} else if len(extra) > 0 {
-		return ias, errors.New("pkcs7: extra data remains after parsing certificate issuer")
-	}
-	ias.IssuerName = issuer
+	ias.IssuerName = asn1.RawValue{FullBytes: cert.RawIssuer}
 	ias.SerialNumber = cert.SerialNumber
 
 	return ias, nil
