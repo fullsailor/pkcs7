@@ -55,6 +55,9 @@ func (p asn1Primitive) EncodeTo(out *bytes.Buffer) error {
 }
 
 func ber2der(ber []byte) ([]byte, error) {
+	if len(ber) == 0 {
+		return nil, errors.New("ber2der: input ber is empty")
+	}
 	//fmt.Printf("--> ber2der: Transcoding %d bytes\n", len(ber))
 	out := new(bytes.Buffer)
 
@@ -161,6 +164,15 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	hack := 0
 	if l > 0x80 {
 		numberOfBytes := (int)(l & 0x7F)
+		if numberOfBytes > 4 { // int is only guaranteed to be 32bit
+			return nil, 0, errors.New("ber2der: BER tag length too long")
+		}
+		if numberOfBytes == 4 && (int)(ber[offset]) > 0x7F {
+			return nil, 0, errors.New("ber2der: BER tag length is negative")
+		}
+		if 0x0 == (int)(ber[offset]) {
+			return nil, 0, errors.New("ber2der: BER tag length has leading zero")
+		}
 		//fmt.Printf("--> (compute length) indicator byte: %x\n", l)
 		//fmt.Printf("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
 		for i := 0; i < numberOfBytes; i++ {
@@ -179,8 +191,12 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	} else {
 		length = (int)(l)
 	}
+
 	//fmt.Printf("--> length        : %d\n", length)
 	contentEnd := offset + length
+	if contentEnd > len(ber) {
+		return nil, 0, errors.New("ber2der: BER tag length is more than available data")
+	}
 	//fmt.Printf("--> content start : %d\n", offset)
 	//fmt.Printf("--> content end   : %d\n", contentEnd)
 	//fmt.Printf("--> content       : % X\n", ber[offset:contentEnd])

@@ -1,3 +1,4 @@
+// Package pkcs7 implements parsing and generation of some PKCS#7 structures.
 package pkcs7
 
 import (
@@ -114,6 +115,9 @@ type signerInfo struct {
 
 // Parse decodes a DER encoded PKCS7 package
 func Parse(data []byte) (p7 *PKCS7, err error) {
+	if len(data) == 0 {
+		return nil, errors.New("pkcs7: input data is empty")
+	}
 	var info contentInfo
 	der, err := ber2der(data)
 	if err != nil {
