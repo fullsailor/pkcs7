@@ -132,7 +132,7 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 		return
 	}
 
-	fmt.Printf("--> Content Type: %s", info.ContentType)
+	// fmt.Printf("--> Content Type: %s", info.ContentType)
 	switch {
 	case info.ContentType.Equal(oidSignedData):
 		return parseSignedData(info.Content.Bytes)
@@ -149,10 +149,7 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, crl := range sd.CRLs {
-		fmt.Printf("CRLs: %v", crl)
-	}
-	fmt.Printf("--> Signed Data Version %d\n", sd.Version)
+	// fmt.Printf("--> Signed Data Version %d\n", sd.Version)
 
 	var compound asn1.RawValue
 	var content unsignedData
