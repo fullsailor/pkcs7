@@ -184,6 +184,8 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 }
 
 // Verify checks the signatures of a PKCS7 object
+// WARNING: Verify does not check signing time or verify certificate chains at
+// this time.
 func (p7 *PKCS7) Verify() (err error) {
 	if len(p7.Signers) == 0 {
 		return errors.New("pkcs7: Message has no signers")
@@ -222,6 +224,8 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if cert == nil {
 		return errors.New("pkcs7: No certificate for signer")
 	}
+	// TODO(fullsailor): Optionally verify certificate chain
+	// TODO(fullsailor): Optionally verify signingTime against certificate NotAfter/NotBefore
 	encodedAttributes, err := marshalAttributes(signer.AuthenticatedAttributes)
 	if err != nil {
 		return err
