@@ -199,7 +199,8 @@ func (p7 *PKCS7) Verify() (err error) {
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
-		digest, err := getDigestFromAttributes(signer.AuthenticatedAttributes)
+		var digest []byte
+		err := unmarshalAttribute(signer.AuthenticatedAttributes, oidAttributeMessageDigest, &digest)
 		if err != nil {
 			return err
 		}
@@ -247,16 +248,6 @@ var (
 	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
-
-func getDigestFromAttributes(attributes []attribute) (digest []byte, err error) {
-	for _, attr := range attributes {
-		if attr.Type.Equal(oidAttributeMessageDigest) {
-			_, err = asn1.Unmarshal(attr.Value.Bytes, &digest)
-			return
-		}
-	}
-	return nil, errors.New("pkcs7: Missing messageDigest attribute")
-}
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
 	for _, cert := range certs {
@@ -417,6 +408,16 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 	return data[:len(data)-padlen], nil
 }
 
+func unmarshalAttribute(attrs []attribute, attributeType asn1.ObjectIdentifier, out interface{}) error {
+	for _, attr := range attrs {
+		if attr.Type.Equal(attributeType) {
+			_, err := asn1.Unmarshal(attr.Value.Bytes, out)
+			return err
+		}
+	}
+	return errors.New("pkcs7: attribute type not in attributes")
+}
+
 // UnmarshalSignedAttribute decodes a single attribute from the signer info
 func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, out interface{}) error {
 	sd, ok := p7.raw.(signedData)
@@ -427,14 +428,7 @@ func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, o
 		return errors.New("pkcs7: payload has no signers")
 	}
 	attributes := sd.SignerInfos[0].AuthenticatedAttributes
-
-	for _, attr := range attributes {
-		if attr.Type.Equal(attributeType) {
-			_, err := asn1.Unmarshal(attr.Value.Bytes, out)
-			return err
-		}
-	}
-	return errors.New("pkcs7: attribute type not in signed attributes")
+	return unmarshalAttribute(attributes, attributeType, out)
 }
 
 // SignedData is an opaque data structure for creating signed data payloads
