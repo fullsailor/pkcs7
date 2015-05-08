@@ -203,7 +203,11 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		if err != nil {
 			return err
 		}
-		h := crypto.SHA1.New()
+		hash, err := getHashForOID(signer.DigestAlgorithm.Algorithm)
+		if err != nil {
+			return err
+		}
+		h := hash.New()
 		h.Write(p7.Content)
 		computed := h.Sum(nil)
 		if !hmac.Equal(digest, computed) {
@@ -261,6 +265,14 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 		}
 	}
 	return nil
+}
+
+func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
+	switch {
+	case oid.Equal(oidDigestAlgorithmSHA1):
+		return crypto.SHA1, nil
+	}
+	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
