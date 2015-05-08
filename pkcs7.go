@@ -183,11 +183,6 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 	}, nil
 }
 
-type digestInfo struct {
-	Algorithm pkix.AlgorithmIdentifier
-	Digest    []byte
-}
-
 // Verify checks the signatures of a PKCS7 object
 func (p7 *PKCS7) Verify() (err error) {
 	if len(p7.Signers) == 0 {
@@ -226,22 +221,6 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if err != nil {
 		return err
 	}
-	/*
-		h := crypto.SHA1.New()
-		h.Write(p7.raw.ContentInfo.Content.Bytes)
-		h.Write(encodedAttributes)
-		messageDigest := h.Sum(nil)
-		di := digestInfo{
-			Algorithm: signer.DigestAlgorithm,
-			Digest:    messageDigest,
-		}
-		fmt.Printf("--> digestInfo %+v\n", di)
-		info, err := asn1.Marshal(di)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("--> asn.1 digestInfo %x\n---> length:%d\n", info, len(info))
-	*/
 	algo := x509.SHA1WithRSA
 	return cert.CheckSignature(algo, encodedAttributes, signer.EncryptedDigest)
 }
