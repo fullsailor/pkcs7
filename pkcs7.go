@@ -353,7 +353,7 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	}
 
 	iv := eci.ContentEncryptionAlgorithm.Parameters.Bytes
-	if len(iv) != 8 {
+	if len(iv) != block.BlockSize() {
 		return nil, errors.New("pkcs7: encryption algorithm parameters are malformed")
 	}
 	mode := cipher.NewCBCDecrypter(block, iv)
