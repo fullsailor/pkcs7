@@ -154,8 +154,12 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 
 	var compound asn1.RawValue
 	var content unsignedData
-	if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
-		return nil, err
+
+	// The Content.Bytes maybe empty on PKI responses.
+	if len(sd.ContentInfo.Content.Bytes) > 0 {
+		if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
+			return nil, err
+		}
 	}
 	// Compound octet string
 	if compound.IsCompound {
