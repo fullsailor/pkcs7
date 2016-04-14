@@ -161,14 +161,30 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 
 	// The Content.Bytes maybe empty on PKI responses.
 	if len(sd.ContentInfo.Content.Bytes) > 0 {
+		var totalBytes []byte
+
 		if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
 			return nil, err
 		}
 	}
 	// Compound octet string
 	if compound.IsCompound {
-		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
+		var parsedContent []byte
+		rest, err := asn1.Unmarshal(compound.Bytes, &parsedContent)
+		if err != nil {
 			return nil, err
+		}
+		content = append(content, parsedContent...)
+
+		//loop through all elements and concatenate all parsed byte slices to get the complete unsigned file.
+		for len(rest) != 0 {
+			var parsedContent []byte
+
+			rest, err = asn1.Unmarshal(rest, &parsedContent)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, parsedContent...)
 		}
 	} else {
 		// assuming this is tag 04
