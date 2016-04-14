@@ -161,8 +161,6 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 
 	// The Content.Bytes maybe empty on PKI responses.
 	if len(sd.ContentInfo.Content.Bytes) > 0 {
-		var totalBytes []byte
-
 		if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
 			return nil, err
 		}
