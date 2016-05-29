@@ -66,7 +66,7 @@ func TestDegenerateCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deg, err := DegenerateCertificate(cert.Certificate.Raw)
+	deg, err := DegenerateCertificates([]*x509.Certificate{cert.Certificate})
 	if err != nil {
 		t.Fatal(err)
 	}
