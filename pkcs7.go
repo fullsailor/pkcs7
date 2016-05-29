@@ -663,14 +663,15 @@ func marshalCertificates(certs []*x509.Certificate) rawCertificates {
 	return rawCertificates{Raw: b}
 }
 
-// DegenerateCertificate creates a signed data structure containing only the
-// provided certificate
-func DegenerateCertificate(cert []byte) ([]byte, error) {
+// DegenerateCertificates creates a signed data structure containing only the
+// provided certificates
+func DegenerateCertificates(certs []*x509.Certificate) ([]byte, error) {
+	rawCerts := marshalCertificates(certs)
 	emptyContent := contentInfo{ContentType: oidData}
 	sd := signedData{
 		Version:      1,
 		ContentInfo:  emptyContent,
-		Certificates: rawCertificates{Raw: cert},
+		Certificates: rawCerts,
 		CRLs:         []pkix.CertificateList{},
 	}
 	content, err := asn1.Marshal(sd)
