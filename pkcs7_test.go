@@ -11,7 +11,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -70,7 +73,33 @@ func TestDegenerateCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	testOpenSSLParse(t, deg)
+
 	fmt.Printf("=== BEGIN DEGENERATE CERT ===\n% X\n=== END DEGENERATE CERT ===\n", deg)
+}
+
+// writes the cert to a temporary file and tests that openssl can read it.
+func testOpenSSLParse(t *testing.T, certBytes []byte) {
+	tmpCertFile, err := ioutil.TempFile("", "testCertificate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpCertFile.Name()) // clean up
+
+	if _, err := tmpCertFile.Write(certBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	opensslCMD := exec.Command("openssl", "pkcs7", "-inform", "der", "-in", tmpCertFile.Name())
+	_, err = opensslCMD.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tmpCertFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 }
 
 func TestSign(t *testing.T) {
