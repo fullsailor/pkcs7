@@ -134,25 +134,34 @@ func TestSign(t *testing.T) {
 }
 
 func TestEncrypt(t *testing.T) {
-	plaintext := []byte("Hello Secret World!")
-	cert, err := createTestCertificate()
-	if err != nil {
-		t.Fatal(err)
+	modes := []int{
+		EncryptionAlgorithmDESCBC,
+		EncryptionAlgorithmAES128GCM,
 	}
-	encrypted, err := Encrypt(plaintext, []*x509.Certificate{cert.Certificate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p7, err := Parse(encrypted)
-	if err != nil {
-		t.Fatalf("cannot Parse encrypted result: %s", err)
-	}
-	result, err := p7.Decrypt(cert.Certificate, cert.PrivateKey)
-	if err != nil {
-		t.Fatalf("cannot Decrypt encrypted result: %s", err)
-	}
-	if bytes.Compare(plaintext, result) != 0 {
-		t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+
+	for _, mode := range modes {
+		ContentEncryptionAlgorithm = mode
+
+		plaintext := []byte("Hello Secret World!")
+		cert, err := createTestCertificate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		encrypted, err := Encrypt(plaintext, []*x509.Certificate{cert.Certificate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p7, err := Parse(encrypted)
+		if err != nil {
+			t.Fatalf("cannot Parse encrypted result: %s", err)
+		}
+		result, err := p7.Decrypt(cert.Certificate, cert.PrivateKey)
+		if err != nil {
+			t.Fatalf("cannot Decrypt encrypted result: %s", err)
+		}
+		if bytes.Compare(plaintext, result) != 0 {
+			t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+		}
 	}
 }
 
