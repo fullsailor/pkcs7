@@ -844,7 +844,15 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 }
 
 // Encrypt creates and returns an envelope data PKCS7 structure with encrypted
-// recipient keys for each recipient public key
+// recipient keys for each recipient public key.
+//
+// The algorithm used to perform encryption is determined by the current value
+// of the global ContentEncryptionAlgorithm package variable. By default, the
+// value is EncryptionAlgorithmDESCBC. To use a different algorithm, change the
+// value before calling Encrypt(). For example:
+//
+//     ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
+//
 // TODO(fullsailor): Add support for encrypting content with other algorithms
 func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 	var eci *encryptedContentInfo
