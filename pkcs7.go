@@ -239,6 +239,7 @@ func (p7 *PKCS7) Verify() (err error) {
 }
 
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
+	signedData := p7.Content
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
 		var digest []byte
