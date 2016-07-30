@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	_ "crypto/sha1" // for crypto.SHA1
@@ -180,6 +181,9 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 
 			rest, err = asn1.Unmarshal(rest, &parsedContent)
 			if err != nil {
+				if strings.Contains(err.Error(), "tags don't match") && len(rest) == 0 {
+					break // there is an unexpected, but optional tag that should not result in an error
+				}
 				return nil, err
 			}
 			content = append(content, parsedContent...)
