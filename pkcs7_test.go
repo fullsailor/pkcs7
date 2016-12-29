@@ -85,8 +85,7 @@ func TestDegenerateCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	testOpenSSLParse(t, deg)
-
-	fmt.Printf("=== BEGIN DEGENERATE CERT ===\n% X\n=== END DEGENERATE CERT ===\n", deg)
+	pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: deg})
 }
 
 // writes the cert to a temporary file and tests that openssl can read it.
@@ -119,28 +118,132 @@ func TestSign(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := []byte("Hello World")
+	for _, testDetach := range []bool{false, true} {
+		toBeSigned, err := NewSignedData(content)
+		if err != nil {
+			t.Fatalf("Cannot initialize signed data: %s", err)
+		}
+		if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
+			t.Fatalf("Cannot add signer: %s", err)
+		}
+		if testDetach {
+			t.Log("Testing detached signature")
+			toBeSigned.Detach()
+		} else {
+			t.Log("Testing attached signature")
+		}
+		signed, err := toBeSigned.Finish()
+		if err != nil {
+			t.Fatalf("Cannot finish signing data: %s", err)
+		}
+		pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
+		p7, err := Parse(signed)
+		if err != nil {
+			t.Fatalf("Cannot parse our signed data: %s", err)
+		}
+		if testDetach {
+			p7.Content = content
+		}
+		if bytes.Compare(content, p7.Content) != 0 {
+			t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
+		}
+		if err := p7.Verify(); err != nil {
+			t.Errorf("Cannot verify our signed data: %s", err)
+		}
+	}
+}
+
+func ExampleSignedData() {
+	// generate a signing cert or load a key pair
+	cert, err := createTestCertificate()
+	if err != nil {
+		fmt.Printf("Cannot create test certificates: %s", err)
+	}
+
+	// Initialize a SignedData struct with content to be signed
+	signedData, err := NewSignedData([]byte("Example data to be signed"))
+	if err != nil {
+		fmt.Printf("Cannot initialize signed data: %s", err)
+	}
+
+	// Add the signing cert and private key
+	if err := signedData.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
+		fmt.Printf("Cannot add signer: %s", err)
+	}
+
+	// Call Detach() is you want to remove content from the signature
+	// and generate an S/MIME detached signature
+	signedData.Detach()
+
+	// Finish() to obtain the signature bytes
+	detachedSignature, err := signedData.Finish()
+	if err != nil {
+		fmt.Printf("Cannot finish signing data: %s", err)
+	}
+	pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: detachedSignature})
+}
+
+func TestOpenSSLVerifyDetachedSignature(t *testing.T) {
+	rootCert, err := createTestCertificateByIssuer("PKCS7 Test Root CA", nil)
+	if err != nil {
+		t.Fatalf("Cannot generate root cert: %s", err)
+	}
+	signerCert, err := createTestCertificateByIssuer("PKCS7 Test Signer Cert", rootCert)
+	if err != nil {
+		t.Fatalf("Cannot generate signer cert: %s", err)
+	}
+	content := []byte("Hello World")
 	toBeSigned, err := NewSignedData(content)
 	if err != nil {
 		t.Fatalf("Cannot initialize signed data: %s", err)
 	}
-	if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
+	if err := toBeSigned.AddSigner(signerCert.Certificate, signerCert.PrivateKey, SignerInfoConfig{}); err != nil {
 		t.Fatalf("Cannot add signer: %s", err)
 	}
+	toBeSigned.Detach()
 	signed, err := toBeSigned.Finish()
 	if err != nil {
 		t.Fatalf("Cannot finish signing data: %s", err)
 	}
-	fmt.Printf("=== BEGIN SIGNED RESULT ===\n% X\n=== END SIGNED RESULT ===\n", signed)
 
-	p7, err := Parse(signed)
+	// write the root cert to a temp file
+	tmpRootCertFile, err := ioutil.TempFile("", "pkcs7TestRootCA")
 	if err != nil {
-		t.Fatalf("Cannot parse our signed data: %s", err)
+		t.Fatal(err)
 	}
-	if bytes.Compare(content, p7.Content) != 0 {
-		t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
+	defer os.Remove(tmpRootCertFile.Name()) // clean up
+	fd, err := os.OpenFile(tmpRootCertFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := p7.Verify(); err != nil {
-		t.Errorf("Cannot verify our signed data: %s", err)
+	pem.Encode(fd, &pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Certificate.Raw})
+	fd.Close()
+
+	// write the signature to a temp file
+	tmpSignatureFile, err := ioutil.TempFile("", "pkcs7Signature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpSignatureFile.Name()) // clean up
+	ioutil.WriteFile(tmpSignatureFile.Name(), signed, 0755)
+
+	// write the content to a temp file
+	tmpContentFile, err := ioutil.TempFile("", "pkcs7Content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpContentFile.Name()) // clean up
+	ioutil.WriteFile(tmpContentFile.Name(), content, 0755)
+
+	// call openssl to verify the signature on the content using the root
+	opensslCMD := exec.Command("openssl", "smime", "-verify",
+		"-in", tmpSignatureFile.Name(), "-inform", "DER",
+		"-content", tmpContentFile.Name(),
+		"-CAfile", tmpRootCertFile.Name())
+	out, err := opensslCMD.Output()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("openssl command failed with %s", err)
 	}
 }
 
@@ -239,15 +342,18 @@ func createTestCertificate() (certKeyPair, error) {
 	if err != nil {
 		return certKeyPair{}, err
 	}
+	fmt.Println("Created root cert")
+	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: signer.Certificate.Raw})
 	pair, err := createTestCertificateByIssuer("Jon Snow", signer)
 	if err != nil {
 		return certKeyPair{}, err
 	}
+	fmt.Println("Created signer cert")
+	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate.Raw})
 	return *pair, nil
 }
 
 func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPair, error) {
-
 	priv, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		return nil, err
@@ -265,9 +371,10 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 			CommonName:   name,
 			Organization: []string{"Acme Co"},
 		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().AddDate(1, 0, 0),
-		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().AddDate(1, 0, 0),
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
 	}
 	var issuerCert *x509.Certificate
 	var issuerKey crypto.PrivateKey
@@ -275,6 +382,8 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 		issuerCert = issuer.Certificate
 		issuerKey = issuer.PrivateKey
 	} else {
+		template.IsCA = true
+		template.KeyUsage |= x509.KeyUsageCertSign
 		issuerCert = &template
 		issuerKey = priv
 	}
