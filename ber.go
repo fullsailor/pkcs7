@@ -133,7 +133,10 @@ func encodeLength(out *bytes.Buffer, length int) (err error) {
 }
 
 func readObject(ber []byte, offset int) (asn1Object, int, error) {
-	//fmt.Printf("\n====> Starting readObject at offset: %d\n\n", offset)
+	berLen := len(ber)
+	if offset >= berLen {
+		return nil, 0, errors.New("ber2der: offset is after end of ber data")
+	}
 	tagStart := offset
 	b := ber[offset]
 	offset++
@@ -143,9 +146,15 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		for ber[offset] >= 0x80 {
 			tag = tag*128 + ber[offset] - 0x80
 			offset++
+			if offset > berLen {
+				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+			}
 		}
 		tag = tag*128 + ber[offset] - 0x80
 		offset++
+		if offset > berLen {
+			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+		}
 	}
 	tagEnd := offset
 
@@ -161,6 +170,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	var length int
 	l := ber[offset]
 	offset++
+	if offset > berLen {
+		return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+	}
 	hack := 0
 	if l > 0x80 {
 		numberOfBytes := (int)(l & 0x7F)
@@ -178,6 +190,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		for i := 0; i < numberOfBytes; i++ {
 			length = length*256 + (int)(ber[offset])
 			offset++
+			if offset > berLen {
+				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+			}
 		}
 	} else if l == 0x80 {
 		// find length by searching content
@@ -191,7 +206,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	} else {
 		length = (int)(l)
 	}
-
+	if length < 0 {
+		return nil, 0, errors.New("ber2der: invalid negative value found in BER tag length")
+	}
 	//fmt.Printf("--> length        : %d\n", length)
 	contentEnd := offset + length
 	if contentEnd > len(ber) {
