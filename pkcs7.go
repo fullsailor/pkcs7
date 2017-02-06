@@ -1,5 +1,6 @@
 // Package pkcs7 implements parsing and generation of some PKCS#7 structures.
-package pkcs7
+
+package pkcs7 // import "go.mozilla.org/pkcs7"
 
 import (
 	"bytes"

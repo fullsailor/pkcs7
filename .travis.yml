@@ -1,6 +1,8 @@
 language: go
-
 go:
     - 1.6
     - 1.7
     - tip
+go_import_path: go.mozilla.org/pkcs7
+script:
+    - go test go.mozilla.org/pkcs7
