@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	_ "crypto/sha1" // for crypto.SHA1
@@ -167,8 +168,25 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 	}
 	// Compound octet string
 	if compound.IsCompound {
-		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
+		var parsedContent []byte
+		rest, err := asn1.Unmarshal(compound.Bytes, &parsedContent)
+		if err != nil {
 			return nil, err
+		}
+		content = append(content, parsedContent...)
+
+		//loop through all elements and concatenate all parsed byte slices to get the complete unsigned file.
+		for len(rest) != 0 {
+			var parsedContent []byte
+
+			rest, err = asn1.Unmarshal(rest, &parsedContent)
+			if err != nil {
+				if strings.Contains(err.Error(), "tags don't match") && len(rest) == 0 {
+					break // there is an unexpected, but optional tag that should not result in an error
+				}
+				return nil, err
+			}
+			content = append(content, parsedContent...)
 		}
 	} else {
 		// assuming this is tag 04
