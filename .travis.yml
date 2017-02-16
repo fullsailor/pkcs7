@@ -5,4 +5,4 @@ go:
     - tip
 go_import_path: go.mozilla.org/pkcs7
 script:
-    - go test go.mozilla.org/pkcs7
+    - make
