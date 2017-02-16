@@ -42,7 +42,7 @@ func TestBer2Der_Negatives(t *testing.T) {
 		Input         []byte
 		ErrorContains string
 	}{
-		{[]byte{0x30, 0x85}, "length too long"},
+		{[]byte{0x30, 0x85}, "tag length too long"},
 		{[]byte{0x30, 0x84, 0x80, 0x0, 0x0, 0x0}, "length is negative"},
 		{[]byte{0x30, 0x82, 0x0, 0x1}, "length has leading zero"},
 		{[]byte{0x30, 0x80, 0x1, 0x2}, "Invalid BER format"},

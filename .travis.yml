@@ -4,5 +4,7 @@ go:
     - 1.7
     - tip
 go_import_path: go.mozilla.org/pkcs7
+before_install:
+    - go get -u github.com/golang/lint/golint
 script:
-    - go test go.mozilla.org/pkcs7
+    - make
