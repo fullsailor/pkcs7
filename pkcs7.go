@@ -1,5 +1,4 @@
 // Package pkcs7 implements parsing and generation of some PKCS#7 structures.
-
 package pkcs7 // import "go.mozilla.org/pkcs7"
 
 import (
@@ -744,7 +743,10 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 }
 
 const (
+	// EncryptionAlgorithmDESCBC is the DES CBC encryption algorithm
 	EncryptionAlgorithmDESCBC = iota
+
+	// EncryptionAlgorithmAES128GCM is the AES 128 bits with GCM encryption algorithm
 	EncryptionAlgorithmAES128GCM
 )
 
