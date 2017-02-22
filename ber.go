@@ -1,4 +1,4 @@
-package pkcs7 // import "go.mozilla.org/pkcs7"
+package pkcs7
 
 import (
 	"bytes"

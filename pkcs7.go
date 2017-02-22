@@ -1,5 +1,5 @@
 // Package pkcs7 implements parsing and generation of some PKCS#7 structures.
-package pkcs7 // import "go.mozilla.org/pkcs7"
+package pkcs7
 
 import (
 	"bytes"
@@ -7,9 +7,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/des"
-	"crypto/hmac"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -44,6 +45,7 @@ var ErrUnsupportedContentType = errors.New("pkcs7: cannot parse data: unimplemen
 type unsignedData []byte
 
 var (
+	// Signed Data OIDs
 	oidData                   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidSignedData             = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
 	oidEnvelopedData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 3}
@@ -53,6 +55,26 @@ var (
 	oidAttributeContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
 	oidAttributeMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
 	oidAttributeSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+
+	// Digest Algorithms
+	oidDigestAlgorithmSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidDigestAlgorithmSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	oidDigestAlgorithmSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
+	oidDigestAlgorithmSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
+
+	// Signature Algorithms
+	oidEncryptionAlgorithmRSA       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidEncryptionAlgorithmDSA       = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 3}
+	oidEncryptionAlgorithmECDSAP256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	oidEncryptionAlgorithmECDSAP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+	oidEncryptionAlgorithmECDSAP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+
+	// Encryption Algorithms
+	oidEncryptionAlgorithmDESCBC     = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
+	oidEncryptionAlgorithmDESEDE3CBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
+	oidEncryptionAlgorithmAES256CBC  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+	oidEncryptionAlgorithmAES128GCM  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
+	oidEncryptionAlgorithmAES128CBC  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 )
 
 type signedData struct {
@@ -205,23 +227,35 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 	}, nil
 }
 
-// Verify checks the signatures of a PKCS7 object
-// WARNING: Verify does not check signing time or verify certificate chains at
-// this time.
+// Verify is a wrapper around VerifyWithChain() that initializes an empty
+// trust store, effectively disabling certificate verification when validating
+// a signature.
 func (p7 *PKCS7) Verify() (err error) {
+	return p7.VerifyWithChain(nil)
+}
+
+// VerifyWithChain checks the signatures of a PKCS7 object.
+// If truststore is not nil, it also verifies the chain of trust of the end-entity
+// signer cert to one of the root in the truststore.
+func (p7 *PKCS7) VerifyWithChain(truststore *x509.CertPool) (err error) {
 	if len(p7.Signers) == 0 {
 		return errors.New("pkcs7: Message has no signers")
 	}
 	for _, signer := range p7.Signers {
-		if err := verifySignature(p7, signer); err != nil {
+		if err := verifySignature(p7, signer, truststore); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func verifySignature(p7 *PKCS7, signer signerInfo) error {
+func verifySignature(p7 *PKCS7, signer signerInfo, truststore *x509.CertPool) (err error) {
 	signedData := p7.Content
+	ee := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
+	if ee == nil {
+		return errors.New("pkcs7: No certificate for signer")
+	}
+	signingTime := time.Now().UTC()
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
 		var digest []byte
@@ -236,26 +270,38 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		h := hash.New()
 		h.Write(p7.Content)
 		computed := h.Sum(nil)
-		if !hmac.Equal(digest, computed) {
+		if subtle.ConstantTimeCompare(digest, computed) != 1 {
 			return &MessageDigestMismatchError{
 				ExpectedDigest: digest,
 				ActualDigest:   computed,
 			}
 		}
-		// TODO(fullsailor): Optionally verify certificate chain
-		// TODO(fullsailor): Optionally verify signingTime against certificate NotAfter/NotBefore
 		signedData, err = marshalAttributes(signer.AuthenticatedAttributes)
 		if err != nil {
 			return err
 		}
+		err = unmarshalAttribute(signer.AuthenticatedAttributes, oidAttributeSigningTime, &signingTime)
+		if err == nil {
+			// signing time found, performing validity check
+			if signingTime.After(ee.NotAfter) || signingTime.Before(ee.NotBefore) {
+				return fmt.Errorf("pkcs7: signing time %q it outside of certificate validity %q to %q",
+					signingTime.Format(time.RFC3339),
+					ee.NotBefore.Format(time.RFC3339),
+					ee.NotBefore.Format(time.RFC3339))
+			}
+		}
 	}
-	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
-	if cert == nil {
-		return errors.New("pkcs7: No certificate for signer")
+	if truststore != nil {
+		_, err = verifyCertChain(ee, p7.Certificates, truststore, signingTime)
+		if err != nil {
+			return err
+		}
 	}
-
-	algo := x509.SHA1WithRSA
-	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
+	sigalg, err := getSignatureAlgorithm(signer.DigestEncryptionAlgorithm, signer.DigestAlgorithm)
+	if err != nil {
+		return err
+	}
+	return ee.CheckSignature(sigalg, signedData, signer.EncryptedDigest)
 }
 
 func marshalAttributes(attrs []attribute) ([]byte, error) {
@@ -272,10 +318,38 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 	return raw.Bytes, nil
 }
 
-var (
-	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
-)
+func getSignatureAlgorithm(digestEncryption, digest pkix.AlgorithmIdentifier) (x509.SignatureAlgorithm, error) {
+	if digestEncryption.Algorithm.Equal(oidEncryptionAlgorithmRSA) {
+		if digest.Algorithm.Equal(oidDigestAlgorithmSHA1) {
+			return x509.SHA1WithRSA, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA256) {
+			return x509.SHA256WithRSA, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA384) {
+			return x509.SHA384WithRSA, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA512) {
+			return x509.SHA512WithRSA, nil
+		}
+	} else if digestEncryption.Algorithm.Equal(oidEncryptionAlgorithmDSA) {
+		if digest.Algorithm.Equal(oidDigestAlgorithmSHA1) {
+			return x509.DSAWithSHA1, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA256) {
+			return x509.DSAWithSHA256, nil
+		}
+	} else if digestEncryption.Algorithm.Equal(oidEncryptionAlgorithmECDSAP256) ||
+		digestEncryption.Algorithm.Equal(oidEncryptionAlgorithmECDSAP384) ||
+		digestEncryption.Algorithm.Equal(oidEncryptionAlgorithmECDSAP521) {
+		if digest.Algorithm.Equal(oidDigestAlgorithmSHA1) {
+			return x509.ECDSAWithSHA1, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA256) {
+			return x509.ECDSAWithSHA256, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA384) {
+			return x509.ECDSAWithSHA384, nil
+		} else if digest.Algorithm.Equal(oidDigestAlgorithmSHA512) {
+			return x509.ECDSAWithSHA512, nil
+		}
+	}
+	return -1, fmt.Errorf("pkcs7: unsupported digest encryption algorithm")
+}
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
 	for _, cert := range certs {
@@ -290,8 +364,47 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
+	case oid.Equal(oidDigestAlgorithmSHA256):
+		return crypto.SHA256, nil
+	case oid.Equal(oidDigestAlgorithmSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidDigestAlgorithmSHA512):
+		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
+}
+
+func getOIDForHash(digestAlg crypto.Hash) (asn1.ObjectIdentifier, error) {
+	switch digestAlg {
+	case crypto.SHA1:
+		return oidDigestAlgorithmSHA1, nil
+	case crypto.SHA256:
+		return oidDigestAlgorithmSHA256, nil
+	case crypto.SHA384:
+		return oidDigestAlgorithmSHA384, nil
+	case crypto.SHA512:
+		return oidDigestAlgorithmSHA512, nil
+	default:
+		return nil, fmt.Errorf("pkcs7: cannot convert hash to oid, unknown hash algorithm")
+	}
+}
+
+func getOIDForEncryptionAlgorithm(key crypto.PrivateKey) (asn1.ObjectIdentifier, error) {
+	switch key.(type) {
+	case *rsa.PrivateKey:
+		return oidEncryptionAlgorithmRSA, nil
+	case *ecdsa.PrivateKey:
+		switch key.(*ecdsa.PrivateKey).Curve.Params().Name {
+		case "P-256":
+			return oidEncryptionAlgorithmECDSAP256, nil
+		case "P-384":
+			return oidEncryptionAlgorithmECDSAP384, nil
+		case "P-521":
+			return oidEncryptionAlgorithmECDSAP521, nil
+		}
+	}
+	return nil, fmt.Errorf("pkcs7: cannot convert encryption algorithm to oid, unknown private key type %T", key)
+
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
@@ -311,7 +424,7 @@ var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, 
 var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
 
 // Decrypt decrypts encrypted content info for recipient cert and private key
-func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, error) {
+func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte, error) {
 	data, ok := p7.raw.(envelopedData)
 	if !ok {
 		return nil, ErrNotEncryptedContent
@@ -320,23 +433,17 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 	if recipient.EncryptedKey == nil {
 		return nil, errors.New("pkcs7: no enveloped recipient for provided certificate")
 	}
-	if priv := pk.(*rsa.PrivateKey); priv != nil {
+	switch pkey.(type) {
+	case *rsa.PrivateKey:
 		var contentKey []byte
-		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, priv, recipient.EncryptedKey)
+		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, pkey.(*rsa.PrivateKey), recipient.EncryptedKey)
 		if err != nil {
 			return nil, err
 		}
 		return data.EncryptedContentInfo.decrypt(contentKey)
 	}
-	fmt.Printf("Unsupported Private Key: %v\n", pk)
 	return nil, ErrUnsupportedAlgorithm
 }
-
-var oidEncryptionAlgorithmDESCBC = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
-var oidEncryptionAlgorithmDESEDE3CBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
-var oidEncryptionAlgorithmAES256CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
-var oidEncryptionAlgorithmAES128GCM = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
-var oidEncryptionAlgorithmAES128CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 
 func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	alg := eci.ContentEncryptionAlgorithm.Algorithm
@@ -504,6 +611,7 @@ func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, o
 type SignedData struct {
 	sd            signedData
 	certs         []*x509.Certificate
+	digestAlg     crypto.Hash
 	messageDigest []byte
 }
 
@@ -519,8 +627,16 @@ type SignerInfoConfig struct {
 	ExtraSignedAttributes []Attribute
 }
 
-// NewSignedData initializes a SignedData with content
+// NewSignedData is a wrapper around new NewSignedDataWithHash() that initializes
+// a signed data struct using the SHA1 hashing algorithm.
 func NewSignedData(data []byte) (*SignedData, error) {
+	return NewSignedDataWithHash(data, crypto.SHA1)
+}
+
+// NewSignedDataWithHash takes data and a hash algorithm and initializes a PKCS7 SignedData
+// struct that is ready to be signed via AddSigner. The hash algorithm is a crypto.Hash
+// constant of a SHA1/256/384/512 function (eg. `crypto.SHA256`).
+func NewSignedDataWithHash(data []byte, digestAlg crypto.Hash) (*SignedData, error) {
 	content, err := asn1.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -529,10 +645,14 @@ func NewSignedData(data []byte) (*SignedData, error) {
 		ContentType: oidData,
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
 	}
-	digAlg := pkix.AlgorithmIdentifier{
-		Algorithm: oidDigestAlgorithmSHA1,
+	oid, err := getOIDForHash(digestAlg)
+	if err != nil {
+		return nil, err
 	}
-	h := crypto.SHA1.New()
+	digAlg := pkix.AlgorithmIdentifier{
+		Algorithm: oid,
+	}
+	h := digestAlg.New()
 	h.Write(data)
 	md := h.Sum(nil)
 	sd := signedData{
@@ -540,7 +660,7 @@ func NewSignedData(data []byte) (*SignedData, error) {
 		Version:                    1,
 		DigestAlgorithmIdentifiers: []pkix.AlgorithmIdentifier{digAlg},
 	}
-	return &SignedData{sd: sd, messageDigest: md}, nil
+	return &SignedData{sd: sd, messageDigest: md, digestAlg: digestAlg}, nil
 }
 
 type attributes struct {
@@ -581,7 +701,7 @@ func (sa attributeSet) Attributes() []attribute {
 	return attrs
 }
 
-func (attrs *attributes) ForMarshaling() ([]attribute, error) {
+func (attrs *attributes) ForMarshalling() ([]attribute, error) {
 	sortables := make(attributeSet, len(attrs.types))
 	for i := range sortables {
 		attrType := attrs.types[i]
@@ -607,8 +727,23 @@ func (attrs *attributes) ForMarshaling() ([]attribute, error) {
 	return sortables.Attributes(), nil
 }
 
-// AddSigner signs attributes about the content and adds certificate to payload
-func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, config SignerInfoConfig) error {
+// AddSigner is a wrapper around AddSignerWithParents() that adds a signer without any parent.
+func (sd *SignedData) AddSigner(ee *x509.Certificate, pkey crypto.PrivateKey, config SignerInfoConfig) error {
+	var parents []*x509.Certificate
+	return sd.AddSignerWithParents(ee, pkey, parents, config)
+}
+
+// AddSignerWithParents signs attributes about the content and adds certificates
+// and signers infos to the Signed Data. The certificate and private
+// of the end-entity signer are used to issue the signature, and any
+// parent of that end-entity that need to be added to the list of
+// certifications can be specified in the parents slice.
+//
+// Following RFC 2315, 9.2 SignerInfo type, the distinguished name of
+// the issuer of the end-entity signer is stored in the issuerAndSerialNumber
+// section of the SignedData.SignerInfo, alongside the serial number of
+// the end-entity.
+func (sd *SignedData) AddSignerWithParents(ee *x509.Certificate, pkey crypto.PrivateKey, parents []*x509.Certificate, config SignerInfoConfig) error {
 	attrs := &attributes{}
 	attrs.Add(oidAttributeContentType, sd.sd.ContentInfo.ContentType)
 	attrs.Add(oidAttributeMessageDigest, sd.messageDigest)
@@ -616,30 +751,46 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	for _, attr := range config.ExtraSignedAttributes {
 		attrs.Add(attr.Type, attr.Value)
 	}
-	finalAttrs, err := attrs.ForMarshaling()
+	finalAttrs, err := attrs.ForMarshalling()
 	if err != nil {
 		return err
 	}
-	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA1)
+	signature, err := signAttributes(finalAttrs, pkey, sd.digestAlg)
 	if err != nil {
 		return err
 	}
-
-	ias, err := cert2issuerAndSerial(cert)
+	var ias issuerAndSerial
+	ias.SerialNumber = ee.SerialNumber
+	if len(parents) == 0 {
+		// no parent, the issue is the end-entity cert itself
+		ias.IssuerName = asn1.RawValue{FullBytes: ee.RawIssuer}
+	} else {
+		err = verifyPartialChain(ee, parents)
+		if err != nil {
+			return err
+		}
+		// the first parent is the issuer
+		ias.IssuerName = asn1.RawValue{FullBytes: parents[0].RawSubject}
+	}
+	oidDigestAlg, err := getOIDForHash(sd.digestAlg)
 	if err != nil {
 		return err
 	}
-
+	oidEncryptionAlg, err := getOIDForEncryptionAlgorithm(pkey)
+	if err != nil {
+		return err
+	}
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
-		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlg},
+		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlg},
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
 	}
 	// create signature of signed attributes
-	sd.certs = append(sd.certs, cert)
+	sd.certs = append(sd.certs, ee)
+	sd.certs = append(sd.certs, parents...)
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
 	return nil
 }
@@ -669,6 +820,48 @@ func (sd *SignedData) Finish() ([]byte, error) {
 	return asn1.Marshal(outer)
 }
 
+// verifyCertChain takes an end-entity certs, a list of potential intermediates and a
+// truststore, and built all potential chains between the EE and a trusted root.
+//
+// When verifying chains that may have expired, currentTime can be set to a past date
+// to allow the verification to pass. If unset, currentTime is set to the current UTC time.
+func verifyCertChain(ee *x509.Certificate, certs []*x509.Certificate, truststore *x509.CertPool, currentTime time.Time) (chains [][]*x509.Certificate, err error) {
+	intermediates := x509.NewCertPool()
+	for _, intermediate := range certs {
+		intermediates.AddCert(intermediate)
+	}
+	verifyOptions := x509.VerifyOptions{
+		Roots:         truststore,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		CurrentTime:   currentTime,
+	}
+	chains, err = ee.Verify(verifyOptions)
+	if err != nil {
+		return chains, fmt.Errorf("pkcs7: failed to verify certificate chain: %v", err)
+	}
+	return
+}
+
+// verifyPartialChain checks that a given cert is issued by the first parent in the list,
+// then continue down the path. It doesn't require the last parent to be a root CA,
+// or to be trusted in any truststore. It simply verifies that the chain provided, albeit
+// partial, makes sense.
+func verifyPartialChain(cert *x509.Certificate, parents []*x509.Certificate) error {
+	if len(parents) == 0 {
+		return fmt.Errorf("pkcs7: zero parents provided to verify the signature of certificate %q", cert.Subject.CommonName)
+	}
+	err := cert.CheckSignatureFrom(parents[0])
+	if err != nil {
+		return fmt.Errorf("pkcs7: certificate signature from parent is invalid: %v", err)
+	}
+	if len(parents) == 1 {
+		// there is no more parent to check, return
+		return nil
+	}
+	return verifyPartialChain(parents[0], parents[1:])
+}
+
 func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 	var ias issuerAndSerial
 	// The issuer RDNSequence has to match exactly the sequence in the certificate
@@ -679,20 +872,30 @@ func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 	return ias, nil
 }
 
+type ecdsaSignature struct {
+	R, S *big.Int // fields must be exported for ASN.1 marshalling
+}
+
 // signs the DER encoded form of the attributes with the private key
-func signAttributes(attrs []attribute, pkey crypto.PrivateKey, hash crypto.Hash) ([]byte, error) {
+func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.Hash) ([]byte, error) {
 	attrBytes, err := marshalAttributes(attrs)
 	if err != nil {
 		return nil, err
 	}
-	h := hash.New()
+	h := digestAlg.New()
 	h.Write(attrBytes)
-	hashed := h.Sum(nil)
-	switch priv := pkey.(type) {
+	hash := h.Sum(nil)
+	switch pkey.(type) {
 	case *rsa.PrivateKey:
-		return rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA1, hashed)
+		return rsa.SignPKCS1v15(rand.Reader, pkey.(*rsa.PrivateKey), digestAlg, hash)
+	case *ecdsa.PrivateKey:
+		r, s, err := ecdsa.Sign(rand.Reader, pkey.(*ecdsa.PrivateKey), hash)
+		if err != nil {
+			return nil, fmt.Errorf("pkcs7: failed to sign attributes: %v", err)
+		}
+		return asn1.Marshal(ecdsaSignature{R: r, S: s})
 	}
-	return nil, ErrUnsupportedAlgorithm
+	return nil, fmt.Errorf("pkcs7: unsupported signing key type %T", pkey)
 }
 
 // concats and wraps the certificates in the RawValue structure

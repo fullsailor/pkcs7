@@ -1,8 +1,10 @@
-package pkcs7 // import "go.mozilla.org/pkcs7"
+package pkcs7
 
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -12,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"os"
 	"os/exec"
@@ -49,13 +52,53 @@ func TestVerifyEC2(t *testing.T) {
 }
 
 func TestVerifyAppStore(t *testing.T) {
-	fixture := UnmarshalTestFixture(AppStoreRecieptFixture)
+	fixture := UnmarshalTestFixture(AppStoreReceiptFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
 		t.Errorf("Parse encountered unexpected error: %v", err)
 	}
 	if err := p7.Verify(); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
+	}
+}
+
+func TestVerifyFirefoxAddon(t *testing.T) {
+	fixture := UnmarshalTestFixture(FirefoxAddonFixture)
+	p7, err := Parse(fixture.Input)
+	if err != nil {
+		t.Errorf("Parse encountered unexpected error: %v", err)
+	}
+	p7.Content = FirefoxAddonContent
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(FirefoxAddonRootCert)
+	if err := p7.VerifyWithChain(certPool); err != nil {
+		t.Errorf("Verify failed with error: %v", err)
+	}
+	// Verify the certificate chain to make sure the identified root
+	// is the one we expect
+	ee := getCertFromCertsByIssuerAndSerial(p7.Certificates, p7.Signers[0].IssuerAndSerialNumber)
+	if ee == nil {
+		t.Errorf("No end-entity certificate found for signer")
+	}
+	signingTime, _ := time.Parse(time.RFC3339, "2017-02-23 09:06:16-05:00")
+	chains, err := verifyCertChain(ee, p7.Certificates, certPool, signingTime)
+	if err != nil {
+		t.Error(err)
+	}
+	if len(chains) != 1 {
+		t.Errorf("Expected to find one chain, but found %d", len(chains))
+	}
+	if len(chains[0]) != 3 {
+		t.Errorf("Expected to find three certificates in chain, but found %d", len(chains[0]))
+	}
+	if chains[0][0].Subject.CommonName != "tabscope@xuldev.org" {
+		t.Errorf("Expected to find EE certificate with subject 'tabscope@xuldev.org', but found '%s'", chains[0][0].Subject.CommonName)
+	}
+	if chains[0][1].Subject.CommonName != "production-signing-ca.addons.mozilla.org" {
+		t.Errorf("Expected to find EE certificate with subject 'production-signing-ca.addons.mozilla.org', but found '%s'", chains[0][1].Subject.CommonName)
+	}
+	if chains[0][2].Subject.CommonName != "root-ca-production-amo" {
+		t.Errorf("Expected to find EE certificate with subject 'root-ca-production-amo', but found '%s'", chains[0][2].Subject.CommonName)
 	}
 }
 
@@ -76,7 +119,7 @@ func TestDecrypt(t *testing.T) {
 }
 
 func TestDegenerateCertificate(t *testing.T) {
-	cert, err := createTestCertificate()
+	cert, err := createTestCertificate(x509.SHA1WithRSA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,49 +156,74 @@ func testOpenSSLParse(t *testing.T, certBytes []byte) {
 }
 
 func TestSign(t *testing.T) {
-	cert, err := createTestCertificate()
-	if err != nil {
-		t.Fatal(err)
-	}
 	content := []byte("Hello World")
-	for _, testDetach := range []bool{false, true} {
-		toBeSigned, err := NewSignedData(content)
+	sigalgs := []x509.SignatureAlgorithm{
+		x509.SHA1WithRSA,
+		x509.SHA256WithRSA,
+		x509.SHA512WithRSA,
+		x509.ECDSAWithSHA1,
+		x509.ECDSAWithSHA256,
+		x509.ECDSAWithSHA384,
+		x509.ECDSAWithSHA512,
+	}
+	for _, sigalgroot := range sigalgs {
+		rootCert, err := createTestCertificateByIssuer("PKCS7 Test Root CA", nil, sigalgroot, true)
 		if err != nil {
-			t.Fatalf("Cannot initialize signed data: %s", err)
+			t.Fatalf("test %s: cannot generate root cert: %s", sigalgroot, err)
 		}
-		if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
-			t.Fatalf("Cannot add signer: %s", err)
-		}
-		if testDetach {
-			t.Log("Testing detached signature")
-			toBeSigned.Detach()
-		} else {
-			t.Log("Testing attached signature")
-		}
-		signed, err := toBeSigned.Finish()
-		if err != nil {
-			t.Fatalf("Cannot finish signing data: %s", err)
-		}
-		pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
-		p7, err := Parse(signed)
-		if err != nil {
-			t.Fatalf("Cannot parse our signed data: %s", err)
-		}
-		if testDetach {
-			p7.Content = content
-		}
-		if bytes.Compare(content, p7.Content) != 0 {
-			t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
-		}
-		if err := p7.Verify(); err != nil {
-			t.Errorf("Cannot verify our signed data: %s", err)
+		truststore := x509.NewCertPool()
+		truststore.AddCert(rootCert.Certificate)
+		for _, sigalginter := range sigalgs {
+			interCert, err := createTestCertificateByIssuer("PKCS7 Test Intermediate Cert", rootCert, sigalginter, true)
+			if err != nil {
+				t.Fatalf("test %s/%s: cannot generate intermediate cert: %s", sigalgroot, sigalginter, err)
+			}
+			var parents []*x509.Certificate
+			parents = append(parents, interCert.Certificate)
+			for _, sigalgsigner := range sigalgs {
+				signerCert, err := createTestCertificateByIssuer("PKCS7 Test Signer Cert", interCert, sigalgsigner, false)
+				if err != nil {
+					t.Fatalf("test %s/%s/%s: cannot generate signer cert: %s", sigalgroot, sigalginter, sigalgsigner, err)
+				}
+				for _, testDetach := range []bool{false, true} {
+					log.Printf("test %s/%s/%s detached %t\n", sigalgroot, sigalginter, sigalgsigner, testDetach)
+					toBeSigned, err := NewSignedData(content)
+					if err != nil {
+						t.Fatalf("test %s/%s/%s: cannot initialize signed data: %s", sigalgroot, sigalginter, sigalgsigner, err)
+					}
+					if err := toBeSigned.AddSignerWithParents(signerCert.Certificate, *signerCert.PrivateKey, parents, SignerInfoConfig{}); err != nil {
+						t.Fatalf("test %s/%s/%s: cannot add signer: %s", sigalgroot, sigalginter, sigalgsigner, err)
+					}
+					if testDetach {
+						toBeSigned.Detach()
+					}
+					signed, err := toBeSigned.Finish()
+					if err != nil {
+						t.Fatalf("test %s/%s/%s: cannot finish signing data: %s", sigalgroot, sigalginter, sigalgsigner, err)
+					}
+					pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
+					p7, err := Parse(signed)
+					if err != nil {
+						t.Fatalf("test %s/%s/%s: cannot parse signed data: %s", sigalgroot, sigalginter, sigalgsigner, err)
+					}
+					if testDetach {
+						p7.Content = content
+					}
+					if bytes.Compare(content, p7.Content) != 0 {
+						t.Errorf("test %s/%s/%s: content was not found in the parsed data:\n\tExpected: %s\n\tActual: %s", sigalgroot, sigalginter, sigalgsigner, content, p7.Content)
+					}
+					if err := p7.VerifyWithChain(truststore); err != nil {
+						t.Errorf("test %s/%s/%s: cannot verify signed data: %s", sigalgroot, sigalginter, sigalgsigner, err)
+					}
+				}
+			}
 		}
 	}
 }
 
 func ExampleSignedData() {
 	// generate a signing cert or load a key pair
-	cert, err := createTestCertificate()
+	cert, err := createTestCertificate(x509.SHA256WithRSA)
 	if err != nil {
 		fmt.Printf("Cannot create test certificates: %s", err)
 	}
@@ -184,66 +252,85 @@ func ExampleSignedData() {
 }
 
 func TestOpenSSLVerifyDetachedSignature(t *testing.T) {
-	rootCert, err := createTestCertificateByIssuer("PKCS7 Test Root CA", nil)
-	if err != nil {
-		t.Fatalf("Cannot generate root cert: %s", err)
-	}
-	signerCert, err := createTestCertificateByIssuer("PKCS7 Test Signer Cert", rootCert)
-	if err != nil {
-		t.Fatalf("Cannot generate signer cert: %s", err)
-	}
 	content := []byte("Hello World")
-	toBeSigned, err := NewSignedData(content)
-	if err != nil {
-		t.Fatalf("Cannot initialize signed data: %s", err)
+	sigalgs := []x509.SignatureAlgorithm{
+		x509.SHA1WithRSA,
+		x509.SHA256WithRSA,
+		x509.SHA512WithRSA,
+		x509.ECDSAWithSHA1,
+		x509.ECDSAWithSHA256,
+		x509.ECDSAWithSHA384,
+		x509.ECDSAWithSHA512,
 	}
-	if err := toBeSigned.AddSigner(signerCert.Certificate, signerCert.PrivateKey, SignerInfoConfig{}); err != nil {
-		t.Fatalf("Cannot add signer: %s", err)
-	}
-	toBeSigned.Detach()
-	signed, err := toBeSigned.Finish()
-	if err != nil {
-		t.Fatalf("Cannot finish signing data: %s", err)
-	}
+	for i, sigalg := range sigalgs {
+		log.Printf("test case %d sigalg %s\n", i, sigalg)
+		rootCert, err := createTestCertificateByIssuer("PKCS7 Test Root CA", nil, sigalg, true)
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: cannot generate root cert: %s", i, sigalg, err)
+		}
+		interCert, err := createTestCertificateByIssuer("PKCS7 Test Intermediate CA", rootCert, sigalg, true)
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: cannot generate intermediate cert: %s", i, sigalg, err)
+		}
+		var parents []*x509.Certificate
+		parents = append(parents, interCert.Certificate)
+		signerCert, err := createTestCertificateByIssuer("PKCS7 Test Signer Cert", interCert, sigalg, false)
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: cannot generate signer cert: %s", i, sigalg, err)
+		}
+		toBeSigned, err := NewSignedData(content)
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: cannot initialize signed data: %s", i, sigalg, err)
+		}
+		if err := toBeSigned.AddSignerWithParents(signerCert.Certificate, *signerCert.PrivateKey, parents, SignerInfoConfig{}); err != nil {
+			t.Fatalf("Cannot add signer: %s", err)
+		}
+		toBeSigned.Detach()
+		signed, err := toBeSigned.Finish()
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: ccannot finish signing data: %s", i, sigalg, err)
+		}
+		pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
 
-	// write the root cert to a temp file
-	tmpRootCertFile, err := ioutil.TempFile("", "pkcs7TestRootCA")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpRootCertFile.Name()) // clean up
-	fd, err := os.OpenFile(tmpRootCertFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pem.Encode(fd, &pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Certificate.Raw})
-	fd.Close()
+		// write the root cert to a temp file
+		tmpRootCertFile, err := ioutil.TempFile("", "pkcs7TestRootCA")
+		if err != nil {
+			t.Fatal(err)
+		}
+		//defer os.Remove(tmpRootCertFile.Name()) // clean up
+		fd, err := os.OpenFile(tmpRootCertFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pem.Encode(fd, &pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Certificate.Raw})
+		fd.Close()
 
-	// write the signature to a temp file
-	tmpSignatureFile, err := ioutil.TempFile("", "pkcs7Signature")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpSignatureFile.Name()) // clean up
-	ioutil.WriteFile(tmpSignatureFile.Name(), signed, 0755)
+		// write the signature to a temp file
+		tmpSignatureFile, err := ioutil.TempFile("", "pkcs7Signature")
+		if err != nil {
+			t.Fatal(err)
+		}
+		//defer os.Remove(tmpSignatureFile.Name()) // clean up
+		ioutil.WriteFile(tmpSignatureFile.Name(), signed, 0755)
 
-	// write the content to a temp file
-	tmpContentFile, err := ioutil.TempFile("", "pkcs7Content")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpContentFile.Name()) // clean up
-	ioutil.WriteFile(tmpContentFile.Name(), content, 0755)
+		// write the content to a temp file
+		tmpContentFile, err := ioutil.TempFile("", "pkcs7Content")
+		if err != nil {
+			t.Fatal(err)
+		}
+		//defer os.Remove(tmpContentFile.Name()) // clean up
+		ioutil.WriteFile(tmpContentFile.Name(), content, 0755)
 
-	// call openssl to verify the signature on the content using the root
-	opensslCMD := exec.Command("openssl", "smime", "-verify",
-		"-in", tmpSignatureFile.Name(), "-inform", "DER",
-		"-content", tmpContentFile.Name(),
-		"-CAfile", tmpRootCertFile.Name())
-	out, err := opensslCMD.Output()
-	t.Logf("%s", out)
-	if err != nil {
-		t.Fatalf("openssl command failed with %s", err)
+		// call openssl to verify the signature on the content using the root
+		opensslCMD := exec.Command("openssl", "smime", "-verify",
+			"-in", tmpSignatureFile.Name(), "-inform", "DER",
+			"-content", tmpContentFile.Name(),
+			"-CAfile", tmpRootCertFile.Name())
+		out, err := opensslCMD.Output()
+		t.Logf("%s", out)
+		if err != nil {
+			t.Fatalf("test case %d sigalg %s: openssl command failed with %s", i, sigalg, err)
+		}
 	}
 }
 
@@ -252,35 +339,41 @@ func TestEncrypt(t *testing.T) {
 		EncryptionAlgorithmDESCBC,
 		EncryptionAlgorithmAES128GCM,
 	}
-
+	sigalgs := []x509.SignatureAlgorithm{
+		x509.SHA1WithRSA,
+		x509.SHA256WithRSA,
+		x509.SHA512WithRSA,
+	}
 	for _, mode := range modes {
-		ContentEncryptionAlgorithm = mode
+		for _, sigalg := range sigalgs {
+			ContentEncryptionAlgorithm = mode
 
-		plaintext := []byte("Hello Secret World!")
-		cert, err := createTestCertificate()
-		if err != nil {
-			t.Fatal(err)
-		}
-		encrypted, err := Encrypt(plaintext, []*x509.Certificate{cert.Certificate})
-		if err != nil {
-			t.Fatal(err)
-		}
-		p7, err := Parse(encrypted)
-		if err != nil {
-			t.Fatalf("cannot Parse encrypted result: %s", err)
-		}
-		result, err := p7.Decrypt(cert.Certificate, cert.PrivateKey)
-		if err != nil {
-			t.Fatalf("cannot Decrypt encrypted result: %s", err)
-		}
-		if bytes.Compare(plaintext, result) != 0 {
-			t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+			plaintext := []byte("Hello Secret World!")
+			cert, err := createTestCertificate(sigalg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encrypted, err := Encrypt(plaintext, []*x509.Certificate{cert.Certificate})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p7, err := Parse(encrypted)
+			if err != nil {
+				t.Fatalf("cannot Parse encrypted result: %s", err)
+			}
+			result, err := p7.Decrypt(cert.Certificate, *cert.PrivateKey)
+			if err != nil {
+				t.Fatalf("cannot Decrypt encrypted result: %s", err)
+			}
+			if bytes.Compare(plaintext, result) != 0 {
+				t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+			}
 		}
 	}
 }
 
 func TestUnmarshalSignedAttribute(t *testing.T) {
-	cert, err := createTestCertificate()
+	cert, err := createTestCertificate(x509.SHA512WithRSA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +384,7 @@ func TestUnmarshalSignedAttribute(t *testing.T) {
 	}
 	oidTest := asn1.ObjectIdentifier{2, 3, 4, 5, 6, 7}
 	testValue := "TestValue"
-	if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{
+	if err := toBeSigned.AddSigner(cert.Certificate, *cert.PrivateKey, SignerInfoConfig{
 		ExtraSignedAttributes: []Attribute{Attribute{Type: oidTest, Value: testValue}},
 	}); err != nil {
 		t.Fatalf("Cannot add signer: %s", err)
@@ -332,32 +425,92 @@ func TestPad(t *testing.T) {
 	}
 }
 
-type certKeyPair struct {
-	Certificate *x509.Certificate
-	PrivateKey  *rsa.PrivateKey
+var test1024Key, test2048Key, test3072Key, test4096Key *rsa.PrivateKey
+
+func init() {
+	test1024Key = &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{
+			N: fromBase10("123024078101403810516614073341068864574068590522569345017786163424062310013967742924377390210586226651760719671658568413826602264886073432535341149584680111145880576802262550990305759285883150470245429547886689754596541046564560506544976611114898883158121012232676781340602508151730773214407220733898059285561"),
+			E: 65537,
+		},
+		D: fromBase10("118892427340746627750435157989073921703209000249285930635312944544706203626114423392257295670807166199489096863209592887347935991101581502404113203993092422730000157893515953622392722273095289787303943046491132467130346663160540744582438810535626328230098940583296878135092036661410664695896115177534496784545"),
+		Primes: []*big.Int{
+			fromBase10("12172745919282672373981903347443034348576729562395784527365032103134165674508405592530417723266847908118361582847315228810176708212888860333051929276459099"),
+			fromBase10("10106518193772789699356660087736308350857919389391620140340519320928952625438936098550728858345355053201610649202713962702543058578827268756755006576249339"),
+		},
+	}
+	test1024Key.Precompute()
+	test2048Key = &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{
+			N: fromBase10("14314132931241006650998084889274020608918049032671858325988396851334124245188214251956198731333464217832226406088020736932173064754214329009979944037640912127943488972644697423190955557435910767690712778463524983667852819010259499695177313115447116110358524558307947613422897787329221478860907963827160223559690523660574329011927531289655711860504630573766609239332569210831325633840174683944553667352219670930408593321661375473885147973879086994006440025257225431977751512374815915392249179976902953721486040787792801849818254465486633791826766873076617116727073077821584676715609985777563958286637185868165868520557"),
+			E: 3,
+		},
+		D: fromBase10("9542755287494004433998723259516013739278699355114572217325597900889416163458809501304132487555642811888150937392013824621448709836142886006653296025093941418628992648429798282127303704957273845127141852309016655778568546006839666463451542076964744073572349705538631742281931858219480985907271975884773482372966847639853897890615456605598071088189838676728836833012254065983259638538107719766738032720239892094196108713378822882383694456030043492571063441943847195939549773271694647657549658603365629458610273821292232646334717612674519997533901052790334279661754176490593041941863932308687197618671528035670452762731"),
+		Primes: []*big.Int{
+			fromBase10("130903255182996722426771613606077755295583329135067340152947172868415809027537376306193179624298874215608270802054347609836776473930072411958753044562214537013874103802006369634761074377213995983876788718033850153719421695468704276694983032644416930879093914927146648402139231293035971427838068945045019075433"),
+			fromBase10("109348945610485453577574767652527472924289229538286649661240938988020367005475727988253438647560958573506159449538793540472829815903949343191091817779240101054552748665267574271163617694640513549693841337820602726596756351006149518830932261246698766355347898158548465400674856021497190430791824869615170301029"),
+		},
+	}
+	test2048Key.Precompute()
+	test3072Key = &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{
+			N: fromBase10("4799422180968749215324244710281712119910779465109490663934897082847293004098645365195947978124390029272750644394844443980065532911010718425428791498896288210928474905407341584968381379157418577471272697781778686372450913810019702928839200328075568223462554606149618941566459398862673532997592879359280754226882565483298027678735544377401276021471356093819491755877827249763065753555051973844057308627201762456191918852016986546071426986328720794061622370410645440235373576002278045257207695462423797272017386006110722769072206022723167102083033531426777518054025826800254337147514768377949097720074878744769255210076910190151785807232805749219196645305822228090875616900385866236956058984170647782567907618713309775105943700661530312800231153745705977436176908325539234432407050398510090070342851489496464612052853185583222422124535243967989533830816012180864309784486694786581956050902756173889941244024888811572094961378021"),
+			E: 65537,
+		},
+		D: fromBase10("4068124900056380177006532461065648259352178312499768312132802353620854992915205894105621345694615110794369150964768050224096623567443679436821868510233726084582567244003894477723706516831312989564775159596496449435830457803384416702014837685962523313266832032687145914871879794104404800823188153886925022171560391765913739346955738372354826804228989767120353182641396181570533678315099748218734875742705419933837638038793286534641711407564379950728858267828581787483317040753987167237461567332386718574803231955771633274184646232632371006762852623964054645811527580417392163873708539175349637050049959954373319861427407953413018816604365474462455009323937599275324390953644555294418021286807661559165324810415569396577697316798600308544755741549699523972971375304826663847015905713096287495342701286542193782001358775773848824496321550110946106870685499577993864871847542645561943034990484973293461948058147956373115641615329"),
+		Primes: []*big.Int{
+			fromBase10("2378529069722721185825622840841310902793949682948530343491428052737890236476884657507685118578733560141370511507721598189068683665232991988491561624429938984370132428230072355214627085652359350722926394699707232921674771664421591347888367477300909202851476404132163673865768760147403525700174918450753162242834161458300343282159799476695001920226357456953682236859505243928716782707623075239350380352265954107362618991716602898266999700316937680986690964564264877"),
+			fromBase10("2017811025336026464312837780072272578817919741496395062543647660689775637351085991504709917848745137013798005682591633910555599626950744674459976829106750083386168859581016361317479081273480343110649405858059581933773354781034946787147300862495438979895430001323443224335618577322449133208754541656374335100929456885995320929464029817626916719434010943205170760536768893924932021302887114400922813817969176636993508191950649313115712159241971065134077636674146073"),
+		},
+	}
+	test3072Key.Precompute()
+	test4096Key = &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{
+			N: fromBase10("633335480064287130853997429184971616419051348693342219741748040433588285601270210251206421401040394238592139790962887290698043839174341843721930134010306454716566698330215646704263665452264344664385995704186692432827662862845900348526672531755932642433662686500295989783595767573119607065791980381547677840410600100715146047382485989885183858757974681241303484641390718944520330953604501686666386926996348457928415093305041429178744778762826377713889019740060910363468343855830206640274442887621960581569183233822878661711798998132931623726434336448716605363514220760343097572198620479297583609779817750646169845195672483600293522186340560792255595411601450766002877850696008003794520089358819042318331840490155176019070646738739580486357084733208876620846449161909966690602374519398451042362690200166144326179405976024265116931974936425064291406950542193873313447617169603706868220189295654943247311295475722243471700112334609817776430552541319671117235957754556272646031356496763094955985615723596562217985372503002989591679252640940571608314743271809251568670314461039035793703429977801961867815257832671786542212589906513979094156334941265621017752516999186481477500481433634914622735206243841674973785078408289183000133399026553"),
+			E: 65537,
+		},
+		D: fromBase10("439373650557744155078930178606343279553665694488479749802070836418412881168612407941793966086633543867614175621952769177088930851151267623886678906158545451731745754402575409204816390946376103491325109185445659065122640946673660760274557781540431107937331701243915001777636528502669576801704352961341634812275635811512806966908648671988644114352046582195051714797831307925775689566757438907578527366568747104508496278929566712224252103563340770696548181508180254674236716995730292431858611476396845443056967589437890065663497768422598977743046882539288481002449571403783500529740184608873520856954837631427724158592309018382711485601884461168736465751756282510065053161144027097169985941910909130083273691945578478173708396726266170473745329617793866669307716920992380350270584929908460462802627239204245339385636926433446418108504614031393494119344916828744888432279343816084433424594432427362258172264834429525166677273382617457205387388293888430391895615438030066428745187333897518037597413369705720436392869403948934993623418405908467147848576977008003556716087129242155836114780890054057743164411952731290520995017097151300091841286806603044227906213832083363876549637037625314539090155417589796428888619937329669464810549362433"),
+		Primes: []*big.Int{
+			fromBase10("25745433817240673759910623230144796182285844101796353869339294232644316274580053211056707671663014355388701931204078502829809738396303142990312095225333440050808647355535878394534263839500592870406002873182360027755750148248672968563366185348499498613479490545488025779331426515670185366021612402246813511722553210128074701620113404560399242413747318161403908617342170447610792422053460359960010544593668037305465806912471260799852789913123044326555978680190904164976511331681163576833618899773550873682147782263100803907156362439021929408298804955194748640633152519828940133338948391986823456836070708197320166146761"),
+			fromBase10("24599914864909676687852658457515103765368967514652318497893275892114442089314173678877914038802355565271545910572804267918959612739009937926962653912943833939518967731764560204997062096919833970670512726396663920955497151415639902788974842698619579886297871162402643104696160155894685518587660015182381685605752989716946154299190561137541792784125356553411300817844325739404126956793095254412123887617931225840421856505925283322918693259047428656823141903489964287619982295891439430302405252447010728112098326033634688757933930065610737780413018498561434074501822951716586796047404555397992425143397497639322075233073"),
+		},
+	}
+	test4096Key.Precompute()
 }
 
-func createTestCertificate() (certKeyPair, error) {
-	signer, err := createTestCertificateByIssuer("Eddard Stark", nil)
+func fromBase10(base10 string) *big.Int {
+	i, ok := new(big.Int).SetString(base10, 10)
+	if !ok {
+		panic("bad number: " + base10)
+	}
+	return i
+}
+
+type certKeyPair struct {
+	Certificate *x509.Certificate
+	PrivateKey  *crypto.PrivateKey
+}
+
+func createTestCertificate(sigAlg x509.SignatureAlgorithm) (certKeyPair, error) {
+	signer, err := createTestCertificateByIssuer("Eddard Stark", nil, sigAlg, true)
 	if err != nil {
 		return certKeyPair{}, err
 	}
-	fmt.Println("Created root cert")
-	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: signer.Certificate.Raw})
-	pair, err := createTestCertificateByIssuer("Jon Snow", signer)
+	pair, err := createTestCertificateByIssuer("Jon Snow", signer, sigAlg, false)
 	if err != nil {
 		return certKeyPair{}, err
 	}
-	fmt.Println("Created signer cert")
-	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate.Raw})
 	return *pair, nil
 }
 
-func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPair, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		return nil, err
-	}
+func createTestCertificateByIssuer(name string, issuer *certKeyPair, sigAlg x509.SignatureAlgorithm, isCA bool) (*certKeyPair, error) {
+	var (
+		err        error
+		priv       crypto.PrivateKey
+		derCert    []byte
+		issuerCert *x509.Certificate
+		issuerKey  crypto.PrivateKey
+	)
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 32)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
@@ -365,8 +518,7 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 	}
 
 	template := x509.Certificate{
-		SerialNumber:       serialNumber,
-		SignatureAlgorithm: x509.SHA256WithRSA,
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName:   name,
 			Organization: []string{"Acme Co"},
@@ -376,28 +528,82 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
 	}
-	var issuerCert *x509.Certificate
-	var issuerKey crypto.PrivateKey
-	if issuer != nil {
-		issuerCert = issuer.Certificate
-		issuerKey = issuer.PrivateKey
-	} else {
+	switch sigAlg {
+	case x509.SHA1WithRSA:
+		priv = test1024Key
+	case x509.SHA256WithRSA:
+		priv = test2048Key
+	case x509.SHA384WithRSA:
+		priv = test3072Key
+	case x509.SHA512WithRSA:
+		priv = test4096Key
+	case x509.ECDSAWithSHA1:
+		priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+	case x509.ECDSAWithSHA256:
+		priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+	case x509.ECDSAWithSHA384:
+		priv, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+	case x509.ECDSAWithSHA512:
+		priv, err = ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if isCA {
 		template.IsCA = true
 		template.KeyUsage |= x509.KeyUsageCertSign
+		template.BasicConstraintsValid = true
+	}
+	if issuer != nil {
+		template.SignatureAlgorithm = 0
+		issuerCert = issuer.Certificate
+		issuerKey = *issuer.PrivateKey
+	} else {
+		// no issuer given,make this a self-signed root cert
 		issuerCert = &template
 		issuerKey = priv
+		template.SignatureAlgorithm = sigAlg
 	}
-	cert, err := x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.Public(), issuerKey)
+	log.Println("creating cert", name, "issued by", issuerCert.Subject.CommonName, "with sigalg", sigAlg)
+	switch priv.(type) {
+	case *rsa.PrivateKey:
+		switch issuerKey.(type) {
+		case *rsa.PrivateKey:
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*rsa.PrivateKey).Public(), issuerKey.(*rsa.PrivateKey))
+		case *ecdsa.PrivateKey:
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*rsa.PrivateKey).Public(), issuerKey.(*ecdsa.PrivateKey))
+		}
+	case *ecdsa.PrivateKey:
+		switch issuerKey.(type) {
+		case *rsa.PrivateKey:
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*ecdsa.PrivateKey).Public(), issuerKey.(*rsa.PrivateKey))
+		case *ecdsa.PrivateKey:
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*ecdsa.PrivateKey).Public(), issuerKey.(*ecdsa.PrivateKey))
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	leaf, err := x509.ParseCertificate(cert)
+	if len(derCert) == 0 {
+		return nil, fmt.Errorf("no certificate created, probably due to wrong keys. types were %T and %T", priv, issuerKey)
+	}
+	cert, err := x509.ParseCertificate(derCert)
 	if err != nil {
 		return nil, err
 	}
+	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 	return &certKeyPair{
-		Certificate: leaf,
-		PrivateKey:  priv,
+		Certificate: cert,
+		PrivateKey:  &priv,
 	}, nil
 }
 
@@ -567,7 +773,7 @@ vSeDCOUMYQR7R9LINYwouHIziqQYMAkGByqGSM44BAMDLwAwLAIUWXBlk40xTwSw
 7HX32MxXYruse9ACFBNGmdX2ZBrVNGrN9N2f6ROk0k9K
 -----END CERTIFICATE-----`
 
-var AppStoreRecieptFixture = `
+var AppStoreReceiptFixture = `
 -----BEGIN PKCS7-----
 MIITtgYJKoZIhvcNAQcCoIITpzCCE6MCAQExCzAJBgUrDgMCGgUAMIIDVwYJKoZI
 hvcNAQcBoIIDSASCA0QxggNAMAoCAQgCAQEEAhYAMAoCARQCAQEEAgwAMAsCAQEC
@@ -676,3 +882,139 @@ VZXl0gKgxSOmDrcp1eQxdlymzrPv9U60wUJ0bkPfrU9qZj3mJrmrkQk61JTe3j6/
 QfjfFBG9JG2mUmYQP1KQ3SypGHzDW8vngvsGu//tNU0NFfOqQu4bYU4VpQl0nPtD
 4B85NkrgvQsWAQ==
 -----END PKCS7-----`
+
+var FirefoxAddonContent = []byte(`Signature-Version: 1.0
+MD5-Digest-Manifest: KjRavc6/KNpuT1QLcB/Gsg==
+SHA1-Digest-Manifest: 5Md5nUg+U7hQ/UfzV+xGKWOruVI=
+
+`)
+
+var FirefoxAddonFixture = `
+-----BEGIN PKCS7-----
+MIIQTAYJKoZIhvcNAQcCoIIQPTCCEDkCAQExCzAJBgUrDgMCGgUAMAsGCSqGSIb3
+DQEHAaCCDL0wggW6MIIDoqADAgECAgYBVpobWVwwDQYJKoZIhvcNAQELBQAwgcUx
+CzAJBgNVBAYTAlVTMRwwGgYDVQQKExNNb3ppbGxhIENvcnBvcmF0aW9uMS8wLQYD
+VQQLEyZNb3ppbGxhIEFNTyBQcm9kdWN0aW9uIFNpZ25pbmcgU2VydmljZTExMC8G
+A1UEAxMocHJvZHVjdGlvbi1zaWduaW5nLWNhLmFkZG9ucy5tb3ppbGxhLm9yZzE0
+MDIGCSqGSIb3DQEJARYlc2VydmljZXMtb3BzK2FkZG9uc2lnbmluZ0Btb3ppbGxh
+LmNvbTAeFw0xNjA4MTcyMDA0NThaFw0yMTA4MTYyMDA0NThaMHYxEzARBgNVBAsT
+ClByb2R1Y3Rpb24xCzAJBgNVBAYTAlVTMRYwFAYDVQQHEw1Nb3VudGFpbiBWaWV3
+MQ8wDQYDVQQKEwZBZGRvbnMxCzAJBgNVBAgTAkNBMRwwGgYDVQQDFBN0YWJzY29w
+ZUB4dWxkZXYub3JnMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAv6e0
+mPD8dt4J8HTNNq4ODns2DV6Weh1hllCIFvOeu1u3UrR03st0BMY8OXYwr/NvRVjg
+bA8gRySWAL+XqLzbhtXNeNegAoxrF+3mYY5rJjsLj/FGI6P6OXjngqwgm9VTBl7m
+jh/KXBSwYoUcavJo6cmk8sCFwoblyQiv+tsWaUCOI6zMzubNtIS+GFvET9y/VZMP
+j6mk8O10wBgJF5MMtA19va3qXy7aCZ7DnZp1l3equd/L6t324TtXoqx6xWQKo6TM
+I0mcTlKvm6TKegTGBCyGn3JRARoIJv4AW1qqgyaHXf9EoY2pKT8Avkri5++NuSJ6
+jtO4k/diBA2MZU20U0KGffYZNTxKDqd6XtI6y1tJPd/OWRFyU+mHntkcm9sar7L3
+nPKujHRox2re10ec1WBnJE3PjlAoesNjxzp+xs2mGGc8DX9NuWn+1uK9xmgGIIMl
+OFfyQ4s0G6hKp5goFcrFZxmexu0ZahOs8vZf8xDBW7yR1zToQElOXHvrscM386os
+kOF9IxQZfcCoPuNQVg1haCONNkx0oau3RQQlOSAZtC79b+rBjQ5JYfjRLYAworf2
+xQaprCh33TD1dTBrvzEbCGszgkN53Vqh5TFBjbU/NyldOkGvK8Xf6WhT5u+aftnV
+lbuE2McAg6x1AlloUZq6PNTBpz7zypcIISnQ+y8CAwEAATANBgkqhkiG9w0BAQsF
+AAOCAgEAIBoo2+OEYNCgP/IbUj9azaf/lde1q4AK/uTMoUeS5WcrXd8aqA0Y1qV7
+xUALgDQAExXgqcOMGu4mPMaoZDgwGI4Tj7XPJQq5Z5zYxpRf/Wtzae33T9BF6QPW
+v5xiRYuol+FbEtqRHZqxDWtIrd1MWBy3wjO3pLPdzDM9jWh+HLxdGWThJszaZp3T
+CqsOx+l9W0Q7qM5ioZpHStgXDfhw38Lg++kLnzcX9MqsjYyezdwE4krqW6hK3+4S
+0LZE4dTgsy8JULkyAF3HrPWEXESnD7c4mx6owZe+BNDK5hsVM/obAqH7sJq/igbM
+5N1l832p/ws8l5xKOr3qBWSzWn6u7ExvqG6Ckh0foJOVXvzGqvrXcoiBGV8S9Z7c
+DghUvMt6b0pZ0ildRCHfTUz7eG3g4MhfbjupR7b+L9FWEJhcd/H0dxpw7SKYha/n
+ePuRL7MXmbW8WLMqO/ImxzL8TPOB3pUg3nITfubV6gpPBmn+0nwbqYUmggJuwgvK
+I2GpN2Ny6EErZy17EEgyhJygJZMj+UzQjC781xxsl3ljpYEqqwgRLIZBSBUD5dXj
+XBuU24w162SeSyHZzkBbuv6lr52pqoZyFrG29DCHECgO9ZmNWgSpiWSkh+vExAG7
+wNs0y61t2HUG+BCMGPQ9sOzouyTfrnLVAWwzswGftFYQfoIBeJIwggb7MIIE46AD
+AgECAgMQAAIwDQYJKoZIhvcNAQEMBQAwfTELMAkGA1UEBhMCVVMxHDAaBgNVBAoT
+E01vemlsbGEgQ29ycG9yYXRpb24xLzAtBgNVBAsTJk1vemlsbGEgQU1PIFByb2R1
+Y3Rpb24gU2lnbmluZyBTZXJ2aWNlMR8wHQYDVQQDExZyb290LWNhLXByb2R1Y3Rp
+b24tYW1vMB4XDTE1MDMxNzIzNTI0MloXDTI1MDMxNDIzNTI0MlowgcUxCzAJBgNV
+BAYTAlVTMRwwGgYDVQQKExNNb3ppbGxhIENvcnBvcmF0aW9uMS8wLQYDVQQLEyZN
+b3ppbGxhIEFNTyBQcm9kdWN0aW9uIFNpZ25pbmcgU2VydmljZTExMC8GA1UEAxMo
+cHJvZHVjdGlvbi1zaWduaW5nLWNhLmFkZG9ucy5tb3ppbGxhLm9yZzE0MDIGCSqG
+SIb3DQEJARYlc2VydmljZXMtb3BzK2FkZG9uc2lnbmluZ0Btb3ppbGxhLmNvbTCC
+AiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAMLMM9m2HBLhCiO9mhljpehT
+hxpzlCnxluzDZ51I/H7MvBbIvZBm9zSpHdffubSsak2qYE69d+ebTa/CK83WIosM
+24/2Qp7n/GGaPJcCC4Y3JkrCsgA8+wV2MbFlKSv+qMdvI/sE3BPYDMCjVPMhHmIP
+XaPWd42OoHpI8R3GGUtVnR3Hm76pa2+v6TwgeMiO8om+ogGufiyv6FNMZ5NuY1Z9
+aLNEvehnAzSfddQyki+6FJd7XkgZbP7pb1Kl8yYgiy4piBerJ9H09uPehffE3Ell
+3cApQL3+0kjaUX4scMjuNQDMKziRZkYgJAM+qA9WA5Jn77AjerQBWQeEev1PWHYh
+0IDlgS/a0bjKmVjNZYG6adrY/R5/whzWGFCIE1UfhPm6PdN0557qvF838C2RFHsI
+KzV6KQf0chMjpa02tPaIctjVhnDQZZNKm2ZfLOt9kQ57Is/e6KxH7pYMit46+s99
+lYM7ZquvWbK19b1Ili/6S1BxSzd3wztgfN5jGsc+jCCYLm+AcVtfNKc8cFZHXKrB
+CwhGmdbWDSBCicZNA7FKJpO3oIx26VPF2XUldA/T5Mh/POGLilK3t9m9qbjEyDp1
+EwoBToOR/aMrdnNYvSWp0g/GHMzSfJjjXyAqrZY2itam/IJd8r9FoRAzevPt/zTX
+BET3INoiCDGRH0XrxUYtAgMGVTejggE5MIIBNTAMBgNVHRMEBTADAQH/MA4GA1Ud
+DwEB/wQEAwIBBjAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUdHxf
+FKXipZLjs20GqIUdNkQXH4gwgagGA1UdIwSBoDCBnYAUs7zqWHSr4W54KrKrnCMe
+qGMsl7ehgYGkfzB9MQswCQYDVQQGEwJVUzEcMBoGA1UEChMTTW96aWxsYSBDb3Jw
+b3JhdGlvbjEvMC0GA1UECxMmTW96aWxsYSBBTU8gUHJvZHVjdGlvbiBTaWduaW5n
+IFNlcnZpY2UxHzAdBgNVBAMTFnJvb3QtY2EtcHJvZHVjdGlvbi1hbW+CAQEwMwYJ
+YIZIAYb4QgEEBCYWJGh0dHA6Ly9hZGRvbnMubW96aWxsYS5vcmcvY2EvY3JsLnBl
+bTANBgkqhkiG9w0BAQwFAAOCAgEArde/fdjb7TE0eH7Ij7xU4JbcSyhY3cQhVYCw
+Fg+Q/2pj+NAfazcjUuLWA0Y/YZs9HOx6j+ZAqO4C/xfMP4RDs9IypxvzHDU6SXgD
+RK6uOKtS07HXLcXgFUBvJEQhbT/h5+IQOA4/GcpCshfD6iyiBBi+IocR+tnKPCuZ
+T3m1t60Eja/MkPKG/Gx8vSodHvlTTsJ2GzjUEANveCZOnlAdp9fjTvFZny9qqnbg
+sfVbuTqKndbCFW5QLXfkna6jBqMrY0+CpMYY2oJ5gwpHbE/7hhukjxGCTcpv7r/O
+M53bb/DZnybDlLLepacljvz7DBA1O1FFtEhf9MR+vyvmBpniAyKQhqG2hsVGurE1
+nBcE+oteZWar2lMp6+etDAb9DRC+jZv0aEQs2o/qQwyD8AGquLgBsJq5Jz3gGxzn
+4r3vGu2lV8VdzIm0C8sOFSWTmTZxQmJbF8xSsQBojnsvEah4DPER+eAt6qKolaWe
+s4drJQjzFyC7HJn2VqalpCwbe9CdMB7eRqzeP6GujJBi80/gx0pAysUtuKKpH5IJ
+WbXAOszfrjb3CaHafYZDnwPoOfj74ogFzjt2f54jwnU+ET/byfjZ7J8SLH316C1V
+HrvFXcTzyMV4aRluVPjPg9x1G58hMIbeuT4GpwQUNdJ9uL8t65v0XwG2t6Y7jpRO
+sFVxBtgxggNXMIIDUwIBATCB0DCBxTELMAkGA1UEBhMCVVMxHDAaBgNVBAoTE01v
+emlsbGEgQ29ycG9yYXRpb24xLzAtBgNVBAsTJk1vemlsbGEgQU1PIFByb2R1Y3Rp
+b24gU2lnbmluZyBTZXJ2aWNlMTEwLwYDVQQDEyhwcm9kdWN0aW9uLXNpZ25pbmct
+Y2EuYWRkb25zLm1vemlsbGEub3JnMTQwMgYJKoZIhvcNAQkBFiVzZXJ2aWNlcy1v
+cHMrYWRkb25zaWduaW5nQG1vemlsbGEuY29tAgYBVpobWVwwCQYFKw4DAhoFAKBd
+MBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkFMQ8XDTE2MDgx
+NzIwMDQ1OFowIwYJKoZIhvcNAQkEMRYEFAxlGvNFSx+Jqj70haE8b7UZk+2GMA0G
+CSqGSIb3DQEBAQUABIICADsDlrucYRgwq9o2QSsO6X6cRa5Zu6w+1n07PTIyc1zn
+Pi1cgkkWZ0kZBHDrJ5CY33yRQPl6I1tHXaq7SkOSdOppKhpUmBiKZxQRAZR21QHk
+R3v1XS+st/o0N+0btv3YoplUifLIwtH89oolxqlStChELu7FuOBretdhx/z12ytA
+EhIIS53o/XjDL7XKJbQA02vzOtOC/Eq6p8BI7F3y6pvtmJIRkeGv+u6ssJa6g5q8
+74w8hHXaH94Z9+hDPqjNWlsXJHgPdAKiEjzDz9oLkvDyX4Pd8JMK5ILskirpG+hj
+Q8jkTc5oYwyuSlBAUTGxW6ZbuOrtfVZvOVtRL/ixuiFiVlJ+JOQOxrtK19ukamsI
+iacFlbLgiA7w0HCtm2DsT9aL67/1e4rJ0lv0MjnQYUMmKQy7g0Gd3+nQPU9pn+Lf
+Z/UmSNWiJ8Csc/seDMyzT6jrzcGPfoSVaUowH0wGrI9If1snwcr+mMg7dWRGf1fm
+y/dcVSzed0ax4LqDmike1EshU+51cKWWlnhyNHK4KH+0fNsBQ0c6clrFpGx9MPmV
+YXie6C+LWkh5x12RU0sJt/SmSZV6q9VliIkX+yY3jBrC/pKgRahtcIyq46Da1E6K
+lc15Euur3NfGow+nott0Z8XutpYdK/2vBKcIh9JOdkd+oe6pcIP6hnhHRp53wqmG
+-----END PKCS7-----`
+
+var FirefoxAddonRootCert = []byte(`
+-----BEGIN CERTIFICATE-----
+MIIGYTCCBEmgAwIBAgIBATANBgkqhkiG9w0BAQwFADB9MQswCQYDVQQGEwJVUzEc
+MBoGA1UEChMTTW96aWxsYSBDb3Jwb3JhdGlvbjEvMC0GA1UECxMmTW96aWxsYSBB
+TU8gUHJvZHVjdGlvbiBTaWduaW5nIFNlcnZpY2UxHzAdBgNVBAMTFnJvb3QtY2Et
+cHJvZHVjdGlvbi1hbW8wHhcNMTUwMzE3MjI1MzU3WhcNMjUwMzE0MjI1MzU3WjB9
+MQswCQYDVQQGEwJVUzEcMBoGA1UEChMTTW96aWxsYSBDb3Jwb3JhdGlvbjEvMC0G
+A1UECxMmTW96aWxsYSBBTU8gUHJvZHVjdGlvbiBTaWduaW5nIFNlcnZpY2UxHzAd
+BgNVBAMTFnJvb3QtY2EtcHJvZHVjdGlvbi1hbW8wggIgMA0GCSqGSIb3DQEBAQUA
+A4ICDQAwggIIAoICAQC0u2HXXbrwy36+MPeKf5jgoASMfMNz7mJWBecJgvlTf4hH
+JbLzMPsIUauzI9GEpLfHdZ6wzSyFOb4AM+D1mxAWhuZJ3MDAJOf3B1Rs6QorHrl8
+qqlNtPGqepnpNJcLo7JsSqqE3NUm72MgqIHRgTRsqUs+7LIPGe7262U+N/T0LPYV
+Le4rZ2RDHoaZhYY7a9+49mHOI/g2YFB+9yZjE+XdplT2kBgA4P8db7i7I0tIi4b0
+B0N6y9MhL+CRZJyxdFe2wBykJX14LsheKsM1azHjZO56SKNrW8VAJTLkpRxCmsiT
+r08fnPyDKmaeZ0BtsugicdipcZpXriIGmsZbI12q5yuwjSELdkDV6Uajo2n+2ws5
+uXrP342X71WiWhC/dF5dz1LKtjBdmUkxaQMOP/uhtXEKBrZo1ounDRQx1j7+SkQ4
+BEwjB3SEtr7XDWGOcOIkoJZWPACfBLC3PJCBWjTAyBlud0C5n3Cy9regAAnOIqI1
+t16GU2laRh7elJ7gPRNgQgwLXeZcFxw6wvyiEcmCjOEQ6PM8UQjthOsKlszMhlKw
+vjyOGDoztkqSBy/v+Asx7OW2Q7rlVfKarL0mREZdSMfoy3zTgtMVCM0vhNl6zcvf
+5HNNopoEdg5yuXo2chZ1p1J+q86b0G5yJRMeT2+iOVY2EQ37tHrqUURncCy4uwIB
+A6OB7TCB6jAMBgNVHRMEBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAWBgNVHSUBAf8E
+DDAKBggrBgEFBQcDAzCBkgYDVR0jBIGKMIGHoYGBpH8wfTELMAkGA1UEBhMCVVMx
+HDAaBgNVBAoTE01vemlsbGEgQ29ycG9yYXRpb24xLzAtBgNVBAsTJk1vemlsbGEg
+QU1PIFByb2R1Y3Rpb24gU2lnbmluZyBTZXJ2aWNlMR8wHQYDVQQDExZyb290LWNh
+LXByb2R1Y3Rpb24tYW1vggEBMB0GA1UdDgQWBBSzvOpYdKvhbngqsqucIx6oYyyX
+tzANBgkqhkiG9w0BAQwFAAOCAgEAaNSRYAaECAePQFyfk12kl8UPLh8hBNidP2H6
+KT6O0vCVBjxmMrwr8Aqz6NL+TgdPmGRPDDLPDpDJTdWzdj7khAjxqWYhutACTew5
+eWEaAzyErbKQl+duKvtThhV2p6F6YHJ2vutu4KIciOMKB8dslIqIQr90IX2Usljq
+8Ttdyf+GhUmazqLtoB0GOuESEqT4unX6X7vSGu1oLV20t7t5eCnMMYD67ZBn0YIU
+/cm/+pan66hHrja+NeDGF8wabJxdqKItCS3p3GN1zUGuJKrLykxqbOp/21byAGog
+Z1amhz6NHUcfE6jki7sM7LHjPostU5ZWs3PEfVVgha9fZUhOrIDsyXEpCWVa3481
+LlAq3GiUMKZ5DVRh9/Nvm4NwrTfB3QkQQJCwfXvO9pwnPKtISYkZUqhEqvXk5nBg
+QCkDSLDjXTx39naBBGIVIqBtKKuVTla9enngdq692xX/CgO6QJVrwpqdGjebj5P8
+5fNZPABzTezG3Uls5Vp+4iIWVAEDkK23cUj3c/HhE+Oo7kxfUeu5Y1ZV3qr61+6t
+ZARKjbu1TuYQHf0fs+GwID8zeLc2zJL7UzcHFwwQ6Nda9OJN4uPAuC/BKaIpxCLL
+26b24/tRam4SJjqpiq20lynhUrmTtt6hbG3E1Hpy3bmkt2DYnuMFwEx2gfXNcnbT
+wNuvFqc=
+-----END CERTIFICATE-----`)
