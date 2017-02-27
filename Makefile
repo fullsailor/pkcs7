@@ -1,15 +1,26 @@
-PROJECT := go.mozilla.org/pkcs7
-
-all: test vet lint
+all: vet lint unused gosimple staticcheck test
 
 test:
-	go test -covermode=count -coverprofile=coverage.out $(PROJECT)
+	go test -covermode=count -coverprofile=coverage.out .
 
 showcoverage: test
 	go tool cover -html=coverage.out
 
 vet:
-	go vet $(PROJECT)
+	go vet .
 
 lint:
-	golint $(PROJECT)
+	golint .
+
+unused:
+	unused .
+
+gosimple:
+	gosimple .
+
+staticcheck:
+	staticcheck .
+
+gettools:
+	go get -u honnef.co/go/tools/...
+	go get -u github.com/golang/lint/golint

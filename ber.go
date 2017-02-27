@@ -150,7 +150,8 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 			}
 		}
-		tag = tag*128 + ber[offset] - 0x80
+		// jvehent 20170227: this doesn't appear to be used anywhere...
+		//tag = tag*128 + ber[offset] - 0x80
 		offset++
 		if offset > berLen {
 			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
@@ -159,13 +160,11 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	tagEnd := offset
 
 	kind := b & 0x20
-	/*
-		if kind == 0 {
-			fmt.Print("--> Primitive\n")
-		} else {
-			fmt.Print("--> Constructed\n")
-		}
-	*/
+	if kind == 0 {
+		debugprint("--> Primitive\n")
+	} else {
+		debugprint("--> Constructed\n")
+	}
 	// read length
 	var length int
 	l := ber[offset]
@@ -185,8 +184,8 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		if 0x0 == (int)(ber[offset]) {
 			return nil, 0, errors.New("ber2der: BER tag length has leading zero")
 		}
-		//fmt.Printf("--> (compute length) indicator byte: %x\n", l)
-		//fmt.Printf("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
+		debugprint("--> (compute length) indicator byte: %x\n", l)
+		debugprint("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
 		for i := 0; i < numberOfBytes; i++ {
 			length = length*256 + (int)(ber[offset])
 			offset++
@@ -202,7 +201,7 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		}
 		length = markerIndex
 		hack = 2
-		//fmt.Printf("--> (compute length) marker found at offset: %d\n", markerIndex+offset)
+		debugprint("--> (compute length) marker found at offset: %d\n", markerIndex+offset)
 	} else {
 		length = (int)(l)
 	}
@@ -214,9 +213,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	if contentEnd > len(ber) {
 		return nil, 0, errors.New("ber2der: BER tag length is more than available data")
 	}
-	//fmt.Printf("--> content start : %d\n", offset)
-	//fmt.Printf("--> content end   : %d\n", contentEnd)
-	//fmt.Printf("--> content       : % X\n", ber[offset:contentEnd])
+	debugprint("--> content start : %d\n", offset)
+	debugprint("--> content end   : %d\n", contentEnd)
+	debugprint("--> content       : % X\n", ber[offset:contentEnd])
 	var obj asn1Object
 	if kind == 0 {
 		obj = asn1Primitive{
@@ -242,4 +241,8 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	}
 
 	return obj, contentEnd + hack, nil
+}
+
+func debugprint(format string, a ...interface{}) {
+	//fmt.Printf(format, a)
 }
