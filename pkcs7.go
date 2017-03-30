@@ -326,7 +326,7 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 		if err != nil {
 			return nil, err
 		}
-		return data.EncryptedContentInfo.decrypt(contentKey)
+		return data.EncryptedContentInfo.Decrypt(contentKey)
 	}
 	fmt.Printf("Unsupported Private Key: %v\n", pk)
 	return nil, ErrUnsupportedAlgorithm
@@ -338,7 +338,7 @@ var oidEncryptionAlgorithmAES256CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 
 var oidEncryptionAlgorithmAES128GCM = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
 var oidEncryptionAlgorithmAES128CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 
-func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
+func (eci encryptedContentInfo) Decrypt(key []byte) ([]byte, error) {
 	alg := eci.ContentEncryptionAlgorithm.Algorithm
 	if !alg.Equal(oidEncryptionAlgorithmDESCBC) &&
 		!alg.Equal(oidEncryptionAlgorithmDESEDE3CBC) &&
@@ -763,30 +763,23 @@ type aesGCMParameters struct {
 	ICVLen int
 }
 
-func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
-	// Create AES key and nonce
-	key := make([]byte, 16)
+func encryptAES128GCM(content []byte, key []byte) (*encryptedContentInfo, error) {
+	// Create nonce
 	nonce := make([]byte, nonceSize)
-
-	_, err := rand.Read(key)
+	_, err := rand.Read(nonce)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	_, err = rand.Read(nonce)
-	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Encrypt content
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	ciphertext := gcm.Seal(nil, nonce, content, nil)
@@ -799,7 +792,7 @@ func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
 
 	paramBytes, err := asn1.Marshal(paramSeq)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	eci := encryptedContentInfo{
@@ -814,26 +807,21 @@ func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
 		EncryptedContent: marshalEncryptedContent(ciphertext),
 	}
 
-	return key, &eci, nil
+	return &eci, nil
 }
 
-func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
-	// Create DES key & CBC IV
-	key := make([]byte, 8)
+func encryptDESCBC(content []byte, key []byte) (*encryptedContentInfo, error) {
+	// Create CBC IV
 	iv := make([]byte, des.BlockSize)
-	_, err := rand.Read(key)
+	_, err := rand.Read(iv)
 	if err != nil {
-		return nil, nil, err
-	}
-	_, err = rand.Read(iv)
-	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Encrypt padded content
 	block, err := des.NewCipher(key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	mode := cipher.NewCBCEncrypter(block, iv)
 	plaintext, err := pad(content, mode.BlockSize())
@@ -850,7 +838,22 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 		EncryptedContent: marshalEncryptedContent(cyphertext),
 	}
 
-	return key, &eci, nil
+	return &eci, nil
+}
+
+// CreateEncryptedContentInfo creates and returns an encrypted-data PKCS7
+// structure.
+func CreateEncryptedContentInfo(content []byte, key []byte, algorithm int) (*encryptedContentInfo, error) {
+	switch algorithm {
+	case EncryptionAlgorithmDESCBC:
+		return encryptDESCBC(content, key)
+
+	case EncryptionAlgorithmAES128GCM:
+		return encryptAES128GCM(content, key)
+
+	default:
+		return nil, ErrUnsupportedEncryptionAlgorithm
+	}
 }
 
 // Encrypt creates and returns an envelope data PKCS7 structure with encrypted
@@ -872,10 +875,20 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 	// Apply chosen symmetric encryption method
 	switch ContentEncryptionAlgorithm {
 	case EncryptionAlgorithmDESCBC:
-		key, eci, err = encryptDESCBC(content)
+		key = make([]byte, 8)
+		_, err := rand.Read(key)
+		if err != nil {
+			return nil, err
+		}
+		eci, err = encryptDESCBC(content, key)
 
 	case EncryptionAlgorithmAES128GCM:
-		key, eci, err = encryptAES128GCM(content)
+		key = make([]byte, 16)
+		_, err := rand.Read(key)
+		if err != nil {
+			return nil, err
+		}
+		eci, err = encryptAES128GCM(content, key)
 
 	default:
 		return nil, ErrUnsupportedEncryptionAlgorithm
