@@ -332,6 +332,38 @@ func TestPad(t *testing.T) {
 	}
 }
 
+func TestCreateEncryptedContentInfo(t *testing.T) {
+	modes := []int{
+		EncryptionAlgorithmDESCBC,
+		EncryptionAlgorithmAES128GCM,
+	}
+
+	for _, mode := range modes {
+		plaintext := []byte("Hello Secret World!")
+		var key []byte
+
+		switch mode {
+		case EncryptionAlgorithmDESCBC:
+			key = []byte("64BitKey")
+		case EncryptionAlgorithmAES128GCM:
+			key = []byte("128BitKey4AESGCM")
+		}
+		ciphertext, err := EncryptLocal(plaintext, key, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		p7, err := Parse(ciphertext)
+		result, err := p7.DecryptLocal(key)
+		if err != nil {
+			t.Fatalf("cannot Decrypt encrypted result: %s", err)
+		}
+		if bytes.Compare(plaintext, result) != 0 {
+			t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
+		}
+	}
+}
+
 type certKeyPair struct {
 	Certificate *x509.Certificate
 	PrivateKey  *rsa.PrivateKey
