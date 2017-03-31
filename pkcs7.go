@@ -74,6 +74,11 @@ type envelopedData struct {
 	EncryptedContentInfo encryptedContentInfo
 }
 
+type encryptedData struct {
+	Version              int
+	EncryptedContentInfo encryptedContentInfo
+}
+
 type recipientInfo struct {
 	Version                int
 	IssuerAndSerialNumber  issuerAndSerial
@@ -143,6 +148,8 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 		return parseSignedData(info.Content.Bytes)
 	case info.ContentType.Equal(oidEnvelopedData):
 		return parseEnvelopedData(info.Content.Bytes)
+	case info.ContentType.Equal(oidEncryptedData):
+		return parseEncryptedData(info.Content.Bytes)
 	}
 	return nil, ErrUnsupportedContentType
 }
@@ -197,6 +204,16 @@ func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 
 func parseEnvelopedData(data []byte) (*PKCS7, error) {
 	var ed envelopedData
+	if _, err := asn1.Unmarshal(data, &ed); err != nil {
+		return nil, err
+	}
+	return &PKCS7{
+		raw: ed,
+	}, nil
+}
+
+func parseEncryptedData(data []byte) (*PKCS7, error) {
+	var ed encryptedData
 	if _, err := asn1.Unmarshal(data, &ed); err != nil {
 		return nil, err
 	}
@@ -326,10 +343,18 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 		if err != nil {
 			return nil, err
 		}
-		return data.EncryptedContentInfo.Decrypt(contentKey)
+		return data.EncryptedContentInfo.decrypt(contentKey)
 	}
 	fmt.Printf("Unsupported Private Key: %v\n", pk)
 	return nil, ErrUnsupportedAlgorithm
+}
+
+func (p7 *PKCS7) DecryptLocal(key []byte) ([]byte, error) {
+	data, ok := p7.raw.(encryptedData)
+	if !ok {
+		return nil, ErrNotEncryptedContent
+	}
+	return data.EncryptedContentInfo.decrypt(key)
 }
 
 var oidEncryptionAlgorithmDESCBC = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
@@ -338,7 +363,7 @@ var oidEncryptionAlgorithmAES256CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 
 var oidEncryptionAlgorithmAES128GCM = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
 var oidEncryptionAlgorithmAES128CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 
-func (eci encryptedContentInfo) Decrypt(key []byte) ([]byte, error) {
+func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	alg := eci.ContentEncryptionAlgorithm.Algorithm
 	if !alg.Equal(oidEncryptionAlgorithmDESCBC) &&
 		!alg.Equal(oidEncryptionAlgorithmDESEDE3CBC) &&
@@ -843,17 +868,41 @@ func encryptDESCBC(content []byte, key []byte) (*encryptedContentInfo, error) {
 
 // CreateEncryptedContentInfo creates and returns an encrypted-data PKCS7
 // structure.
-func CreateEncryptedContentInfo(content []byte, key []byte, algorithm int) (*encryptedContentInfo, error) {
+func EncryptLocal(content []byte, key []byte, algorithm int) ([]byte, error) {
+	var eci *encryptedContentInfo
+	var err error
 	switch algorithm {
 	case EncryptionAlgorithmDESCBC:
-		return encryptDESCBC(content, key)
+		eci, err = encryptDESCBC(content, key)
 
 	case EncryptionAlgorithmAES128GCM:
-		return encryptAES128GCM(content, key)
+		eci, err = encryptAES128GCM(content, key)
 
 	default:
 		return nil, ErrUnsupportedEncryptionAlgorithm
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare encrypted-data content
+	ed := encryptedData{
+		Version:              0,
+		EncryptedContentInfo: *eci,
+	}
+	innerContent, err := asn1.Marshal(ed)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare outer payload structure
+	wrapper := contentInfo{
+		ContentType: oidEncryptedData,
+		Content:     asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: innerContent},
+	}
+
+	return asn1.Marshal(wrapper)
 }
 
 // Encrypt creates and returns an envelope data PKCS7 structure with encrypted

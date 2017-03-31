@@ -348,11 +348,13 @@ func TestCreateEncryptedContentInfo(t *testing.T) {
 		case EncryptionAlgorithmAES128GCM:
 			key = []byte("128BitKey4AESGCM")
 		}
-		eci, err := CreateEncryptedContentInfo(plaintext, key, mode)
+		ciphertext, err := EncryptLocal(plaintext, key, mode)
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := eci.Decrypt(key)
+
+		p7, err := Parse(ciphertext)
+		result, err := p7.DecryptLocal(key)
 		if err != nil {
 			t.Fatalf("cannot Decrypt encrypted result: %s", err)
 		}
