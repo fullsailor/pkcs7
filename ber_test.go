@@ -45,7 +45,7 @@ func TestBer2Der_Negatives(t *testing.T) {
 		{[]byte{0x30, 0x85}, "tag length too long"},
 		{[]byte{0x30, 0x84, 0x80, 0x0, 0x0, 0x0}, "length is negative"},
 		{[]byte{0x30, 0x82, 0x0, 0x1}, "length has leading zero"},
-		{[]byte{0x30, 0x80, 0x1, 0x2}, "Invalid BER format"},
+		{[]byte{0x30, 0x80, 0x1, 0x2, 0x1, 0x2}, "Invalid BER format"},
 		{[]byte{0x30, 0x03, 0x01, 0x02}, "length is more than available data"},
 		{[]byte{0x30}, "end of ber data reached"},
 	}
@@ -58,5 +58,41 @@ func TestBer2Der_Negatives(t *testing.T) {
 		if !strings.Contains(err.Error(), fixture.ErrorContains) {
 			t.Errorf("Unexpected error thrown.\n\tExpected: /%s/\n\tActual: %s", fixture.ErrorContains, err.Error())
 		}
+	}
+}
+
+func TestBer2Der_NestedMultipleIndefinite(t *testing.T) {
+	// indefinite length fixture
+	ber := []byte{0x30, 0x80, 0x30, 0x80, 0x02, 0x01, 0x01, 0x00, 0x00, 0x30, 0x80, 0x02, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00}
+	expected := []byte{0x30, 0x0A, 0x30, 0x03, 0x02, 0x01, 0x01, 0x30, 0x03, 0x02, 0x01, 0x02}
+
+	der, err := ber2der(ber)
+	if err != nil {
+		t.Fatalf("ber2der failed with error: %v", err)
+	}
+	if bytes.Compare(der, expected) != 0 {
+		t.Errorf("ber2der result did not match.\n\tExpected: % X\n\tActual: % X", expected, der)
+	}
+
+	if der2, err := ber2der(der); err != nil {
+		t.Errorf("ber2der on DER bytes failed with error: %v", err)
+	} else {
+		if !bytes.Equal(der, der2) {
+			t.Error("ber2der is not idempotent")
+		}
+	}
+	var thing struct {
+		Nest1 struct {
+			Number int
+		}
+		Nest2 struct {
+			Number int
+		}
+	}
+	rest, err := asn1.Unmarshal(der, &thing)
+	if err != nil {
+		t.Errorf("Cannot parse resulting DER because: %v", err)
+	} else if len(rest) > 0 {
+		t.Errorf("Resulting DER has trailing data: % X", rest)
 	}
 }
