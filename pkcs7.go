@@ -53,7 +53,12 @@ var (
 	oidDigestAlgorithmSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
 
 	// Signature Algorithms
-	oidEncryptionAlgorithmRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidEncryptionAlgorithmRSA       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidEncryptionAlgorithmRSASHA1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
+	oidEncryptionAlgorithmRSASHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
+	oidEncryptionAlgorithmRSASHA384 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 12}
+	oidEncryptionAlgorithmRSASHA512 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 13}
+
 	oidEncryptionAlgorithmDSA     = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 3}
 	oidDigestAlgorithmECDSASHA1   = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 1}
 	oidDigestAlgorithmECDSASHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
@@ -107,7 +112,18 @@ func getDigestOIDForSignatureAlgorithm(digestAlg x509.SignatureAlgorithm) (asn1.
 func getOIDForEncryptionAlgorithm(key crypto.PrivateKey, oidDigestAlg asn1.ObjectIdentifier) (asn1.ObjectIdentifier, error) {
 	switch key.(type) {
 	case *rsa.PrivateKey:
-		return oidEncryptionAlgorithmRSA, nil
+		switch {
+		default:
+			return oidEncryptionAlgorithmRSA, nil
+		case oidDigestAlg.Equal(oidDigestAlgorithmSHA1):
+			return oidEncryptionAlgorithmRSASHA1, nil
+		case oidDigestAlg.Equal(oidDigestAlgorithmSHA256):
+			return oidEncryptionAlgorithmRSASHA256, nil
+		case oidDigestAlg.Equal(oidDigestAlgorithmSHA384):
+			return oidEncryptionAlgorithmRSASHA384, nil
+		case oidDigestAlg.Equal(oidDigestAlgorithmSHA512):
+			return oidEncryptionAlgorithmRSASHA512, nil
+		}
 	case *ecdsa.PrivateKey:
 		switch {
 		case oidDigestAlg.Equal(oidDigestAlgorithmSHA1):
