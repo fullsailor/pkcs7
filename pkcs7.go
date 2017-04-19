@@ -93,19 +93,22 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 
 // getDigestOIDForSignatureAlgorithm takes an x509.SignatureAlgorithm
 // and returns the corresponding OID digest algorithm
-func getDigestOIDForSignatureAlgorithm(digestAlg x509.SignatureAlgorithm) (asn1.ObjectIdentifier, error) {
-	switch digestAlg {
-	case x509.SHA1WithRSA, x509.ECDSAWithSHA1:
-		return oidDigestAlgorithmSHA1, nil
-	case x509.SHA256WithRSA, x509.ECDSAWithSHA256:
-		return oidDigestAlgorithmSHA256, nil
-	case x509.SHA384WithRSA, x509.ECDSAWithSHA384:
-		return oidDigestAlgorithmSHA384, nil
-	case x509.SHA512WithRSA, x509.ECDSAWithSHA512:
-		return oidDigestAlgorithmSHA512, nil
-	}
-	return nil, fmt.Errorf("pkcs7: cannot convert hash to oid, unknown hash algorithm")
-}
+//
+// FIXME: disabled because of bug 1357815 in sign.go
+//
+//func getDigestOIDForSignatureAlgorithm(digestAlg x509.SignatureAlgorithm) (asn1.ObjectIdentifier, error) {
+//	switch digestAlg {
+//	case x509.SHA1WithRSA, x509.ECDSAWithSHA1:
+//		return oidDigestAlgorithmSHA1, nil
+//	case x509.SHA256WithRSA, x509.ECDSAWithSHA256:
+//		return oidDigestAlgorithmSHA256, nil
+//	case x509.SHA384WithRSA, x509.ECDSAWithSHA384:
+//		return oidDigestAlgorithmSHA384, nil
+//	case x509.SHA512WithRSA, x509.ECDSAWithSHA512:
+//		return oidDigestAlgorithmSHA512, nil
+//	}
+//	return nil, fmt.Errorf("pkcs7: cannot convert hash to oid, unknown hash algorithm")
+//}
 
 // getOIDForEncryptionAlgorithm takes the private key type of the signer and
 // the OID of a digest algorithm to return the appropriate signerInfo.DigestEncryptionAlgorithm
