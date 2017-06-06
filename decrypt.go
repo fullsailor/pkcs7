@@ -42,6 +42,14 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte
 	return nil, ErrUnsupportedAlgorithm
 }
 
+func (p7 *PKCS7) DecryptUsingPSK(key []byte) ([]byte, error) {
+	data, ok := p7.raw.(encryptedData)
+	if !ok {
+		return nil, ErrNotEncryptedContent
+	}
+	return data.EncryptedContentInfo.decrypt(key)
+}
+
 func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	alg := eci.ContentEncryptionAlgorithm.Algorithm
 	if !alg.Equal(oidEncryptionAlgorithmDESCBC) &&
