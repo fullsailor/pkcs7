@@ -55,7 +55,7 @@ var ContentEncryptionAlgorithm = EncryptionAlgorithmDESCBC
 // content with an unsupported algorithm.
 var ErrUnsupportedEncryptionAlgorithm = errors.New("pkcs7: cannot encrypt content: only DES-CBC and AES-128-GCM supported")
 
-// ErrUnsupportedEncryptionAlgorithm is returned when attempting to encrypt
+// ErrPSKNotProvided is returned when attempting to encrypt
 // using a PSK without actually providing the PSK.
 var ErrPSKNotProvided = errors.New("pkcs7: cannot encrypt content: PSK not provided")
 
@@ -242,6 +242,8 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 	return asn1.Marshal(wrapper)
 }
 
+// EncryptUsingPSK creates and returns an encrypted data PKCS7 structure,
+// encrypted using caller provided pre-shared secret.
 func EncryptUsingPSK(content []byte, key []byte) ([]byte, error) {
 	var eci *encryptedContentInfo
 	var err error

@@ -66,12 +66,12 @@ func TestEncryptUsingPSK(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		p7, err := Parse(ciphertext)
+		p7, _ := Parse(ciphertext)
 		result, err := p7.DecryptUsingPSK(key)
 		if err != nil {
 			t.Fatalf("cannot Decrypt encrypted result: %s", err)
 		}
-		if bytes.Compare(plaintext, result) != 0 {
+		if !bytes.Equal(plaintext, result) {
 			t.Errorf("encrypted data does not match plaintext:\n\tExpected: %s\n\tActual: %s", plaintext, result)
 		}
 	}

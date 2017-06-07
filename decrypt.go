@@ -42,6 +42,8 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte
 	return nil, ErrUnsupportedAlgorithm
 }
 
+// DecryptUsingPSK decrypts encrypted data using caller provided
+// pre-shared secret
 func (p7 *PKCS7) DecryptUsingPSK(key []byte) ([]byte, error) {
 	data, ok := p7.raw.(encryptedData)
 	if !ok {
