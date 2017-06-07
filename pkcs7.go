@@ -42,6 +42,7 @@ var (
 	oidData                   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidSignedData             = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
 	oidEnvelopedData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 3}
+	oidEncryptedData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
 	oidAttributeContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
 	oidAttributeMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
 	oidAttributeSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
@@ -168,12 +169,24 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 		return parseSignedData(info.Content.Bytes)
 	case info.ContentType.Equal(oidEnvelopedData):
 		return parseEnvelopedData(info.Content.Bytes)
+	case info.ContentType.Equal(oidEncryptedData):
+		return parseEncryptedData(info.Content.Bytes)
 	}
 	return nil, ErrUnsupportedContentType
 }
 
 func parseEnvelopedData(data []byte) (*PKCS7, error) {
 	var ed envelopedData
+	if _, err := asn1.Unmarshal(data, &ed); err != nil {
+		return nil, err
+	}
+	return &PKCS7{
+		raw: ed,
+	}, nil
+}
+
+func parseEncryptedData(data []byte) (*PKCS7, error) {
+	var ed encryptedData
 	if _, err := asn1.Unmarshal(data, &ed); err != nil {
 		return nil, err
 	}
