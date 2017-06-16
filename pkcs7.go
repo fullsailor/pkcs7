@@ -19,7 +19,8 @@ import (
 	"sort"
 	"time"
 
-	_ "crypto/sha1" // for crypto.SHA1
+	_ "crypto/sha1"   // for crypto.SHA1
+	_ "crypto/sha256" // for crypto.SHA1
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -254,7 +255,10 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	algo := x509.SHA1WithRSA
+	algo, err := getSignAlgorithm(signer.DigestAlgorithm.Algorithm)
+	if err != nil {
+		return err
+	}
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 
@@ -274,6 +278,7 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 
 var (
 	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidDigestAlgorithmSHA256  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
 
@@ -290,8 +295,20 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
+	case oid.Equal(oidDigestAlgorithmSHA256):
+		return crypto.SHA256, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
+}
+
+func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
+	switch {
+	case oid.Equal(oidDigestAlgorithmSHA1):
+		return x509.SHA1WithRSA, nil
+	case oid.Equal(oidDigestAlgorithmSHA256):
+		return x509.SHA256WithRSA, nil
+	}
+	return x509.UnknownSignatureAlgorithm, ErrUnsupportedAlgorithm
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
