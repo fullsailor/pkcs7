@@ -20,7 +20,8 @@ import (
 	"time"
 
 	_ "crypto/sha1"   // for crypto.SHA1
-	_ "crypto/sha256" // for crypto.SHA1
+	_ "crypto/sha256" // for crypto.SHA256
+	_ "crypto/sha512" // for crypto.SHA512 and crypto.SHA384
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -277,9 +278,11 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 }
 
 var (
-	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidDigestAlgorithmSHA256  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
-	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
+	oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
+	oidRSA    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
@@ -293,20 +296,28 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
-	case oid.Equal(oidDigestAlgorithmSHA1):
+	case oid.Equal(oidSHA1):
 		return crypto.SHA1, nil
-	case oid.Equal(oidDigestAlgorithmSHA256):
+	case oid.Equal(oidSHA256):
 		return crypto.SHA256, nil
+	case oid.Equal(oidSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidSHA512):
+		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
 
 func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
 	switch {
-	case oid.Equal(oidDigestAlgorithmSHA1):
+	case oid.Equal(oidSHA1):
 		return x509.SHA1WithRSA, nil
-	case oid.Equal(oidDigestAlgorithmSHA256):
+	case oid.Equal(oidSHA256):
 		return x509.SHA256WithRSA, nil
+	case oid.Equal(oidSHA384):
+		return x509.SHA384WithRSA, nil
+	case oid.Equal(oidSHA512):
+		return x509.SHA512WithRSA, nil
 	}
 	return x509.UnknownSignatureAlgorithm, ErrUnsupportedAlgorithm
 }
@@ -547,7 +558,7 @@ func NewSignedData(data []byte) (*SignedData, error) {
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
 	}
 	digAlg := pkix.AlgorithmIdentifier{
-		Algorithm: oidDigestAlgorithmSHA1,
+		Algorithm: oidSHA1,
 	}
 	h := crypto.SHA1.New()
 	h.Write(data)
@@ -649,8 +660,8 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
-		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidSHA1},
+		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidRSA},
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
@@ -917,7 +928,7 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 			Version:               0,
 			IssuerAndSerialNumber: ias,
 			KeyEncryptionAlgorithm: pkix.AlgorithmIdentifier{
-				Algorithm: oidEncryptionAlgorithmRSA,
+				Algorithm: oidRSA,
 			},
 			EncryptedKey: encrypted,
 		}
