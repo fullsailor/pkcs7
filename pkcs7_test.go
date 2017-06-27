@@ -241,9 +241,12 @@ func TestOpenSSLVerifyDetachedSignature(t *testing.T) {
 		"-content", tmpContentFile.Name(),
 		"-CAfile", tmpRootCertFile.Name())
 	out, err := opensslCMD.Output()
-	t.Logf("%s", out)
+	t.Logf("%q", out)
 	if err != nil {
-		t.Fatalf("openssl command failed with %s", err)
+		t.Errorf("openssl command failed with %s", err)
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Errorf("stderr output: %q", ee.Stderr)
+		}
 	}
 }
 
