@@ -109,16 +109,7 @@ func SigningParamsForPublicKey(pub interface{}, requestedSigAlgo x509.SignatureA
 				err = errors.New("x509: cannot sign with hash function requested")
 				return
 			}
-			// copy x509.SignatureAlgorithm.isRSAPSS method
-			isRSAPSS := func() bool {
-				switch requestedSigAlgo {
-				case x509.SHA256WithRSAPSS, x509.SHA384WithRSAPSS, x509.SHA512WithRSAPSS:
-					return true
-				default:
-					return false
-				}
-			}
-			if isRSAPSS() {
+			if isRSAPSS(requestedSigAlgo) {
 				sigAlgo.Parameters = rsaPSSParameters(hashFunc)
 			}
 			found = true
@@ -165,30 +156,6 @@ var (
 // added to Go in 1.9
 var asn1NullRawValue = asn1.RawValue{
 	Tag: 5, /* ASN.1 NULL */
-}
-
-var signatureAlgorithmDetails = []struct {
-	algo       x509.SignatureAlgorithm
-	oid        asn1.ObjectIdentifier
-	pubKeyAlgo x509.PublicKeyAlgorithm
-	hash       crypto.Hash
-}{
-	{x509.MD2WithRSA, oidSignatureMD2WithRSA, x509.RSA, crypto.Hash(0) /* no value for MD2 */},
-	{x509.MD5WithRSA, oidSignatureMD5WithRSA, x509.RSA, crypto.MD5},
-	{x509.SHA1WithRSA, oidSignatureSHA1WithRSA, x509.RSA, crypto.SHA1},
-	{x509.SHA1WithRSA, oidISOSignatureSHA1WithRSA, x509.RSA, crypto.SHA1},
-	{x509.SHA256WithRSA, oidSignatureSHA256WithRSA, x509.RSA, crypto.SHA256},
-	{x509.SHA384WithRSA, oidSignatureSHA384WithRSA, x509.RSA, crypto.SHA384},
-	{x509.SHA512WithRSA, oidSignatureSHA512WithRSA, x509.RSA, crypto.SHA512},
-	{x509.SHA256WithRSAPSS, oidSignatureRSAPSS, x509.RSA, crypto.SHA256},
-	{x509.SHA384WithRSAPSS, oidSignatureRSAPSS, x509.RSA, crypto.SHA384},
-	{x509.SHA512WithRSAPSS, oidSignatureRSAPSS, x509.RSA, crypto.SHA512},
-	{x509.DSAWithSHA1, oidSignatureDSAWithSHA1, x509.DSA, crypto.SHA1},
-	{x509.DSAWithSHA256, oidSignatureDSAWithSHA256, x509.DSA, crypto.SHA256},
-	{x509.ECDSAWithSHA1, oidSignatureECDSAWithSHA1, x509.ECDSA, crypto.SHA1},
-	{x509.ECDSAWithSHA256, oidSignatureECDSAWithSHA256, x509.ECDSA, crypto.SHA256},
-	{x509.ECDSAWithSHA384, oidSignatureECDSAWithSHA384, x509.ECDSA, crypto.SHA384},
-	{x509.ECDSAWithSHA512, oidSignatureECDSAWithSHA512, x509.ECDSA, crypto.SHA512},
 }
 
 // pssParameters reflects the parameters in an AlgorithmIdentifier that
