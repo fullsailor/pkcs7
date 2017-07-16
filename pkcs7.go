@@ -356,6 +356,22 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 	return nil, ErrUnsupportedAlgorithm
 }
 
+func (p7 *PKCS7) EncryptionAlgorithm() (int, error) {
+	data, ok := p7.raw.(envelopedData)
+	if !ok {
+		return 0, ErrNotEncryptedContent
+	}
+	alg := data.EncryptedContentInfo.ContentEncryptionAlgorithm.Algorithm
+	switch {
+	case alg.Equal(oidEncryptionAlgorithmDESCBC), alg.Equal(oidEncryptionAlgorithmDESEDE3CBC):
+		return EncryptionAlgorithmDESCBC, nil
+	case alg.Equal(oidEncryptionAlgorithmAES256CBC), alg.Equal(oidEncryptionAlgorithmAES128GCM), alg.Equal(oidEncryptionAlgorithmAES128CBC):
+		return EncryptionAlgorithmAES128GCM, nil
+	default:
+		return 0, ErrUnsupportedAlgorithm
+	}
+}
+
 var oidEncryptionAlgorithmDESCBC = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
 var oidEncryptionAlgorithmDESEDE3CBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
 var oidEncryptionAlgorithmAES256CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
@@ -905,10 +921,10 @@ type config struct {
 // by the Encrypt function.
 type Option func(*config)
 
-// WithAES128GCM configures Encrypt to use EncryptionAlgorithmAES128GCM.
-func WithAES128GCM() Option {
+// WithEncryptionAlgorithm configures Encrypt to use a specific EncryptionAlgorithm.
+func WithEncryptionAlgorithm(algo int) Option {
 	return func(c *config) {
-		c.ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
+		c.ContentEncryptionAlgorithm = algo
 	}
 }
 
