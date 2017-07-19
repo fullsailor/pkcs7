@@ -182,6 +182,21 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	return nil
 }
 
+func (si *signerInfo) SetUnauthenticatedAttributes(extra_unsigned_attrs []Attribute) error {
+	unsigned_attrs := &attributes{}
+	for _, attr := range extra_unsigned_attrs {
+		unsigned_attrs.Add(attr.Type, attr.Value)
+	}
+	finalUnsignedAttrs, err := unsigned_attrs.ForMarshalling()
+	if err != nil {
+		return err
+	}
+
+	si.UnauthenticatedAttributes = finalUnsignedAttrs
+
+	return nil
+}
+
 // AddCertificate adds the certificate to the payload. Useful for parent certificates
 func (sd *SignedData) AddCertificate(cert *x509.Certificate) {
 	sd.certs = append(sd.certs, cert)
@@ -191,6 +206,10 @@ func (sd *SignedData) AddCertificate(cert *x509.Certificate) {
 // This must be called right before Finish()
 func (sd *SignedData) Detach() {
 	sd.sd.ContentInfo = contentInfo{ContentType: OIDData}
+}
+
+func (sd *SignedData) GetSignedData() *signedData {
+	return &sd.sd
 }
 
 // Finish marshals the content and its signers
