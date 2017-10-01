@@ -205,22 +205,32 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 	}, nil
 }
 
-// Verify checks the signatures of a PKCS7 object
-// WARNING: Verify does not check signing time or verify certificate chains at
-// this time.
-func (p7 *PKCS7) Verify() (err error) {
+type VerifyOptions struct {
+	// Verify that the signature time is within the NotBefore / NotAfter time of the signing cert
+	VerifySignatureTime bool
+}
+
+
+// Verify checks the signatures of a PKCS7 object. Options can be nil (in which case defaults are used)
+// WARNING: Verify does not check signing time by default or verify certificate chains at this time.
+func (p7 *PKCS7) Verify(opts *VerifyOptions) (err error) {
 	if len(p7.Signers) == 0 {
 		return errors.New("pkcs7: Message has no signers")
 	}
 	for _, signer := range p7.Signers {
-		if err := verifySignature(p7, signer); err != nil {
+		if err := verifySignature(p7, signer, opts); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func verifySignature(p7 *PKCS7, signer signerInfo) error {
+func verifySignature(p7 *PKCS7, signer signerInfo, opts *VerifyOptions) error {
+	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
+	if cert == nil {
+		return errors.New("pkcs7: No certificate for signer")
+	}
+
 	signedData := p7.Content
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
@@ -242,17 +252,27 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 				ActualDigest:   computed,
 			}
 		}
-		// TODO(fullsailor): Optionally verify certificate chain
-		// TODO(fullsailor): Optionally verify signingTime against certificate NotAfter/NotBefore
+
+		// Verify signingTime against certificate NotAfter/NotBefore
+		if opts != nil && opts.VerifySignatureTime {
+			var signingTime time.Time
+			err := unmarshalAttribute(signer.AuthenticatedAttributes, oidAttributeSigningTime, &signingTime)
+			if err != nil {
+				return err
+			}
+			if signingTime.Before(cert.NotBefore) || signingTime.After(cert.NotAfter) {
+				return fmt.Errorf("pkcs7: signing time (%v) is not in certificate validity range (%v to %v)",
+					signingTime, cert.NotBefore, cert.NotAfter)
+			}
+		}
+
 		signedData, err = marshalAttributes(signer.AuthenticatedAttributes)
 		if err != nil {
 			return err
 		}
 	}
-	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
-	if cert == nil {
-		return errors.New("pkcs7: No certificate for signer")
-	}
+
+	// TODO(fullsailor): Optionally verify certificate chain
 
 	algo := x509.SHA1WithRSA
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
