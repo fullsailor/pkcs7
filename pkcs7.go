@@ -208,11 +208,14 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 type VerifyOptions struct {
 	// Verify that the signature time is within the NotBefore / NotAfter time of the signing cert
 	VerifySignatureTime bool
+	// Verify the certificate against this trust store
+	TrustStore *x509.CertPool
 }
 
 
 // Verify checks the signatures of a PKCS7 object. Options can be nil (in which case defaults are used)
-// WARNING: Verify does not check signing time by default or verify certificate chains at this time.
+// WARNING: Important verification options (such as verifying the certificate against a trust store) are not enabled
+// by default.
 func (p7 *PKCS7) Verify(opts *VerifyOptions) (err error) {
 	if len(p7.Signers) == 0 {
 		return errors.New("pkcs7: Message has no signers")
@@ -253,7 +256,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo, opts *VerifyOptions) error {
 			}
 		}
 
-		// Verify signingTime against certificate NotAfter/NotBefore
+		// Optionally verify signingTime against certificate NotAfter/NotBefore
 		if opts != nil && opts.VerifySignatureTime {
 			var signingTime time.Time
 			err := unmarshalAttribute(signer.AuthenticatedAttributes, oidAttributeSigningTime, &signingTime)
@@ -272,7 +275,20 @@ func verifySignature(p7 *PKCS7, signer signerInfo, opts *VerifyOptions) error {
 		}
 	}
 
-	// TODO(fullsailor): Optionally verify certificate chain
+	// Optionally verify certificate chain
+	if opts != nil && opts.TrustStore != nil {
+		opts := x509.VerifyOptions{
+			Roots:         opts.TrustStore,
+			CurrentTime:   time.Now(),
+			DNSName:       "",
+			Intermediates: x509.NewCertPool(),
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		}
+		_, err := cert.Verify(opts)
+		if err != nil {
+			return err
+		}
+	}
 
 	algo := x509.SHA1WithRSA
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)

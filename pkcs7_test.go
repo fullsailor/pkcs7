@@ -375,10 +375,12 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 		NotAfter:    time.Now().AddDate(1, 0, 0),
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
+		BasicConstraintsValid: true,
 	}
 	var issuerCert *x509.Certificate
 	var issuerKey crypto.PrivateKey
 	if issuer != nil {
+		template.IsCA = false
 		issuerCert = issuer.Certificate
 		issuerKey = issuer.PrivateKey
 	} else {
@@ -442,18 +444,22 @@ func MarshalTestFixture(t TestFixture, w io.Writer) {
 }
 
 func TestInvalidSignature(t *testing.T) {
-	cert, err := createTestCertificate()
+	rootCert, err := createTestCertificateByIssuer("Root CA", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := []byte("Hello, World!")
+	signingCert, err := createTestCertificateByIssuer("Signing Cert", rootCert)
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	content := []byte("Hello, World!")
 	createAndVerifyTest := func(modifier func(p7 *PKCS7)) error {
 		toBeSigned, err := NewSignedData(content)
 		if err != nil {
 			t.Fatalf("Cannot initialize signed data: %s", err)
 		}
-		if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
+		if err := toBeSigned.AddSigner(signingCert.Certificate, signingCert.PrivateKey, SignerInfoConfig{}); err != nil {
 			t.Fatalf("Cannot add signer: %s", err)
 		}
 		signed, err := toBeSigned.Finish()
@@ -473,12 +479,17 @@ func TestInvalidSignature(t *testing.T) {
 			modifier(p7)
 		}
 
-		return p7.Verify(&VerifyOptions{VerifySignatureTime: true})
+		opts := &VerifyOptions{
+			VerifySignatureTime: true,
+			TrustStore: x509.NewCertPool(),
+		}
+		opts.TrustStore.AddCert(rootCert.Certificate)
+		return p7.Verify(opts)
 	}
 
 	err = createAndVerifyTest(nil)
 	if err != nil {
-		t.Error("Got verification error for what should have been valid.")
+		t.Errorf("Got verification error for what should have been valid: %v", err)
 	}
 	err = createAndVerifyTest(func(p7 *PKCS7) {
 		p7.Content = []byte("Modified content!")
@@ -514,12 +525,12 @@ func TestInvalidSignature(t *testing.T) {
 	}
 
 	err = createAndVerifyTest(func(p7 *PKCS7) {
-		altCert, err := createTestCertificate()
+		altSigningCert, err := createTestCertificateByIssuer("Alternate signing cert", rootCert)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		p7.Certificates = []*x509.Certificate{altCert.Certificate}
+		p7.Certificates = []*x509.Certificate{altSigningCert.Certificate}
 	})
 	if err == nil {
 		t.Error("Should have gotten a verification error when a non-matching certificate was included.")
@@ -555,6 +566,32 @@ func TestInvalidSignature(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("Should have gotten a verification error when signing time is missing.")
+	}
+
+	originalSigningCert := signingCert
+	{
+		altRoot, err := createTestCertificateByIssuer("Alternate Root CA", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		altSigningCert, err := createTestCertificateByIssuer("Alternate signing cert", altRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		signingCert = altSigningCert
+	}
+	err = createAndVerifyTest(nil)
+	if err == nil {
+		t.Error("Should have gotten a verification error when using an untrusted certificate.")
+	}
+	signingCert = originalSigningCert
+
+	
+	// Sanity check original passing test still passes
+	err = createAndVerifyTest(nil)
+	if err != nil {
+		t.Errorf("Got verification error for what should have been valid: %v", err)
 	}
 }
 
