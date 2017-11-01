@@ -15,6 +15,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"sort"
 	"time"
@@ -745,6 +746,7 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 const (
 	EncryptionAlgorithmDESCBC = iota
 	EncryptionAlgorithmAES128GCM
+	EncryptionAlgorithmAES256CBC
 )
 
 // ContentEncryptionAlgorithm determines the algorithm used to encrypt the
@@ -761,6 +763,51 @@ const nonceSize = 12
 type aesGCMParameters struct {
 	Nonce  []byte `asn1:"tag:4"`
 	ICVLen int
+}
+
+func encryptAES256CBC(content []byte) ([]byte, *encryptedContentInfo, error) {
+	// Create AES key
+	key := make([]byte, 32)
+
+	_, err := rand.Read(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Encrypt content
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Add padding
+	paddedPlaintext, err := pad(content, aes.BlockSize)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ciphertext := make([]byte, aes.BlockSize+len(paddedPlaintext))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, nil, err
+	}
+
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext[aes.BlockSize:], paddedPlaintext)
+
+	eci := encryptedContentInfo{
+		ContentType: oidData,
+		ContentEncryptionAlgorithm: pkix.AlgorithmIdentifier{
+			Algorithm: oidEncryptionAlgorithmAES256CBC,
+			Parameters: asn1.RawValue{
+				Tag:   asn1.TagOctetString,
+				Bytes: iv,
+			},
+		},
+		EncryptedContent: marshalEncryptedContent(ciphertext[aes.BlockSize:]),
+	}
+
+	return key, &eci, nil
 }
 
 func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
@@ -876,6 +923,9 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 
 	case EncryptionAlgorithmAES128GCM:
 		key, eci, err = encryptAES128GCM(content)
+
+	case EncryptionAlgorithmAES256CBC:
+		key, eci, err = encryptAES256CBC(content)
 
 	default:
 		return nil, ErrUnsupportedEncryptionAlgorithm
