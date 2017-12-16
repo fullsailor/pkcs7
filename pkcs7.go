@@ -19,7 +19,9 @@ import (
 	"sort"
 	"time"
 
-	_ "crypto/sha1" // for crypto.SHA1
+	_ "crypto/sha1"   // for crypto.SHA1
+	_ "crypto/sha256" // for crypto.SHA256
+	_ "crypto/sha512" // for crypto.SHA512 and crypto.SHA384
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -254,7 +256,10 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	algo := x509.SHA1WithRSA
+	algo, err := getSignAlgorithm(signer.DigestAlgorithm.Algorithm)
+	if err != nil {
+		return err
+	}
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 
@@ -273,8 +278,11 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 }
 
 var (
-	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
+	oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
+	oidRSA    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
@@ -288,10 +296,30 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
-	case oid.Equal(oidDigestAlgorithmSHA1):
+	case oid.Equal(oidSHA1):
 		return crypto.SHA1, nil
+	case oid.Equal(oidSHA256):
+		return crypto.SHA256, nil
+	case oid.Equal(oidSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidSHA512):
+		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
+}
+
+func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
+	switch {
+	case oid.Equal(oidSHA1):
+		return x509.SHA1WithRSA, nil
+	case oid.Equal(oidSHA256):
+		return x509.SHA256WithRSA, nil
+	case oid.Equal(oidSHA384):
+		return x509.SHA384WithRSA, nil
+	case oid.Equal(oidSHA512):
+		return x509.SHA512WithRSA, nil
+	}
+	return x509.UnknownSignatureAlgorithm, ErrUnsupportedAlgorithm
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
@@ -530,9 +558,9 @@ func NewSignedData(data []byte) (*SignedData, error) {
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
 	}
 	digAlg := pkix.AlgorithmIdentifier{
-		Algorithm: oidDigestAlgorithmSHA1,
+		Algorithm: oidSHA256,
 	}
-	h := crypto.SHA1.New()
+	h := crypto.SHA256.New()
 	h.Write(data)
 	md := h.Sum(nil)
 	sd := signedData{
@@ -620,7 +648,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	if err != nil {
 		return err
 	}
-	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA1)
+	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA256)
 	if err != nil {
 		return err
 	}
@@ -632,8 +660,8 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
-		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidSHA256},
+		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidRSA},
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
@@ -690,7 +718,7 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, hash crypto.Hash)
 	hashed := h.Sum(nil)
 	switch priv := pkey.(type) {
 	case *rsa.PrivateKey:
-		return rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA1, hashed)
+		return rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, hashed)
 	}
 	return nil, ErrUnsupportedAlgorithm
 }
@@ -900,7 +928,7 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 			Version:               0,
 			IssuerAndSerialNumber: ias,
 			KeyEncryptionAlgorithm: pkix.AlgorithmIdentifier{
-				Algorithm: oidEncryptionAlgorithmRSA,
+				Algorithm: oidRSA,
 			},
 			EncryptedKey: encrypted,
 		}
