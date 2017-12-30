@@ -19,8 +19,8 @@ import (
 	"sort"
 	"time"
 
-	_ "crypto/md5" // for crypto.MD5
-	_ "crypto/sha1" // for crypto.SHA1
+	_ "crypto/md5"    // for crypto.MD5
+	_ "crypto/sha1"   // for crypto.SHA1
 	_ "crypto/sha256" // for crypto.SHA256
 	_ "crypto/sha512" // for crypto.SHA384 & 512
 )
@@ -257,7 +257,10 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	algo := x509.SHA1WithRSA
+	algo, err := getDigestEncryptionAlgorithm(signer.DigestAlgorithm.Algorithm)
+	if err != nil {
+		return err
+	}
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 
@@ -276,9 +279,7 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 }
 
 var (
-	oidDigestAlgorithmMD5     = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 5}
 	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidDigestAlgorithmSHA256  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 	oidDigestAlgorithmSHA384  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
 	oidDigestAlgorithmSHA512  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
 	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
@@ -295,18 +296,26 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
-	case oid.Equal(oidDigestAlgorithmMD5):
-		return crypto.MD5, nil
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
-	case oid.Equal(oidDigestAlgorithmSHA256):
-		return crypto.SHA256, nil
 	case oid.Equal(oidDigestAlgorithmSHA384):
 		return crypto.SHA384, nil
 	case oid.Equal(oidDigestAlgorithmSHA512):
 		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
+}
+
+func getDigestEncryptionAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
+	switch {
+	case oid.Equal(oidDigestAlgorithmSHA1):
+		return x509.SHA1WithRSA, nil
+	case oid.Equal(oidDigestAlgorithmSHA384):
+		return x509.SHA384WithRSA, nil
+	case oid.Equal(oidDigestAlgorithmSHA512):
+		return x509.SHA512WithRSA, nil
+	}
+	return x509.UnknownSignatureAlgorithm, ErrUnsupportedAlgorithm
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
