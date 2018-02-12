@@ -19,6 +19,20 @@ import (
 	"time"
 )
 
+func BenchmarkVerify(b *testing.B) {
+	fixture := UnmarshalTestFixture(SignedTestFixture)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p7, err := Parse(fixture.Input)
+		if err != nil {
+			b.Errorf("Parse encountered unexpected error: %v", err)
+		}
+		if err := p7.Verify(); err != nil {
+			b.Errorf("Verify failed with error: %v", err)
+		}
+	}
+}
+
 func TestVerify(t *testing.T) {
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	p7, err := Parse(fixture.Input)
@@ -32,7 +46,6 @@ func TestVerify(t *testing.T) {
 	expected := []byte("We the People")
 	if bytes.Compare(p7.Content, expected) != 0 {
 		t.Errorf("Signed content does not match.\n\tExpected:%s\n\tActual:%s", expected, p7.Content)
-
 	}
 }
 
@@ -149,6 +162,27 @@ func TestSign(t *testing.T) {
 		}
 		if err := p7.Verify(); err != nil {
 			t.Errorf("Cannot verify our signed data: %s", err)
+		}
+	}
+}
+
+func BenchmarkSign(b *testing.B) {
+	cert, err := createTestCertificate()
+	if err != nil {
+		b.Fatal(err)
+	}
+	content := make([]byte, 128*1024*1024)
+	for i := 0; i < b.N; i++ {
+		toBeSigned, err := NewSignedData(content)
+		if err != nil {
+			b.Fatalf("Cannot initialize signed data: %s", err)
+		}
+		if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
+			b.Fatalf("Cannot add signer: %s", err)
+		}
+		_, err = toBeSigned.Finish()
+		if err != nil {
+			b.Fatalf("Cannot finish signing data: %s", err)
 		}
 	}
 }
