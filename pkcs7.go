@@ -253,9 +253,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if cert == nil {
 		return errors.New("pkcs7: No certificate for signer")
 	}
-
-	algo := x509.SHA1WithRSA
-	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
+	return cert.CheckSignature(cert.SignatureAlgorithm, signedData, signer.EncryptedDigest)
 }
 
 func marshalAttributes(attrs []attribute) ([]byte, error) {
