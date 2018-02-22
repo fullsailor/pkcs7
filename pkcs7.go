@@ -272,7 +272,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	algo := x509.SHA1WithRSA
+	algo := getSignatureAlgorithmFromAI(signer.DigestEncryptionAlgorithm)
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 
@@ -651,7 +651,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidSignatureSHA1WithRSA},
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
