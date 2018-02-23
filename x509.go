@@ -79,6 +79,9 @@ type pssParameters struct {
 	TrailerField int                      `asn1:"optional,explicit,tag:3,default:1"`
 }
 
+// asn1.NullBytes is not available prior to Go 1.9
+var nullBytes = []byte{asn1.TagNull, 0}
+
 func getSignatureAlgorithmFromAI(ai pkix.AlgorithmIdentifier) x509.SignatureAlgorithm {
 	if !ai.Algorithm.Equal(oidSignatureRSAPSS) {
 		for _, details := range signatureAlgorithmDetails {
@@ -109,10 +112,10 @@ func getSignatureAlgorithmFromAI(ai pkix.AlgorithmIdentifier) x509.SignatureAlgo
 	// https://tools.ietf.org/html/rfc3447#section-8.1), that the
 	// salt length matches the hash length, and that the trailer
 	// field has the default value.
-	if !bytes.Equal(params.Hash.Parameters.FullBytes, asn1.NullBytes) ||
+	if !bytes.Equal(params.Hash.Parameters.FullBytes, nullBytes) ||
 		!params.MGF.Algorithm.Equal(oidMGF1) ||
 		!mgf1HashFunc.Algorithm.Equal(params.Hash.Algorithm) ||
-		!bytes.Equal(mgf1HashFunc.Parameters.FullBytes, asn1.NullBytes) ||
+		!bytes.Equal(mgf1HashFunc.Parameters.FullBytes, nullBytes) ||
 		params.TrailerField != 1 {
 		return x509.UnknownSignatureAlgorithm
 	}
