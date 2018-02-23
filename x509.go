@@ -80,7 +80,7 @@ type pssParameters struct {
 }
 
 // asn1.NullBytes is not available prior to Go 1.9
-var nullBytes = []byte{asn1.TagNull, 0}
+var nullBytes = []byte{5, 0}
 
 func getSignatureAlgorithmFromAI(ai pkix.AlgorithmIdentifier) x509.SignatureAlgorithm {
 	if !ai.Algorithm.Equal(oidSignatureRSAPSS) {
