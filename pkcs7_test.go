@@ -251,6 +251,7 @@ func TestEncrypt(t *testing.T) {
 	modes := []int{
 		EncryptionAlgorithmDESCBC,
 		EncryptionAlgorithmAES128GCM,
+		EncryptionAlgorithmAES256CBC,
 	}
 
 	for _, mode := range modes {

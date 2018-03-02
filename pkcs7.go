@@ -20,6 +20,7 @@ import (
 	"time"
 
 	_ "crypto/sha1" // for crypto.SHA1
+	"io"
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -763,8 +764,9 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 }
 
 const (
-	EncryptionAlgorithmDESCBC = iota
+	EncryptionAlgorithmDESCBC    = iota
 	EncryptionAlgorithmAES128GCM
+	EncryptionAlgorithmAES256CBC
 )
 
 // ContentEncryptionAlgorithm determines the algorithm used to encrypt the
@@ -837,6 +839,44 @@ func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
 	return key, &eci, nil
 }
 
+func encryptAES256CBC(rawContent []byte) ([]byte, *encryptedContentInfo, error) {
+	// NewCipher creates and returns a new cipher.Block
+	// The key argument should be AES key,
+	// either 16, 24, or 32 bytes to select
+	key := make([]byte, 32)
+
+	// CBC mode works on blocks so plaintexts may need to be padded
+	// to the next whole block
+	plaintext, err := pad(rawContent, aes.BlockSize)
+	if len(plaintext)%aes.BlockSize != 0 {
+		return nil, nil, errors.New("plaintext is not a multiple of the block size")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ciphertext := make([]byte, len(plaintext))
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, nil, err
+	}
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext, plaintext)
+
+	// Prepare ASN.1 Encrypted Content Info
+	eci := encryptedContentInfo{
+		ContentType: oidData,
+		ContentEncryptionAlgorithm: pkix.AlgorithmIdentifier{
+			Algorithm:  oidEncryptionAlgorithmAES256CBC,
+			Parameters: asn1.RawValue{Tag: asn1.TagOctetString, Bytes: iv},
+		},
+		EncryptedContent: marshalEncryptedContent(ciphertext),
+	}
+	return key, &eci, nil
+}
+
 func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 	// Create DES key & CBC IV
 	key := make([]byte, 8)
@@ -896,7 +936,8 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 
 	case EncryptionAlgorithmAES128GCM:
 		key, eci, err = encryptAES128GCM(content)
-
+	case EncryptionAlgorithmAES256CBC:
+		key, eci, err = encryptAES256CBC(content)
 	default:
 		return nil, ErrUnsupportedEncryptionAlgorithm
 	}
