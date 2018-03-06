@@ -37,7 +37,7 @@ func TestVerify(t *testing.T) {
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %v", err)
 	}
 
 	if err := p7.Verify(); err != nil {
