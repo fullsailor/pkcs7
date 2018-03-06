@@ -260,6 +260,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	if err != nil {
 		return err
 	}
+	//     fmt.Println(algo, signer.DigestAlgorithm.Algorithm)
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 

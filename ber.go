@@ -24,16 +24,16 @@ func (s asn1Structured) BodyLen() (res int) {
 	return
 }
 
-func (s asn1Structured) FullLen() int {
-	return s.BodyLen() + len(s.tagBytes) + lengthLength(s.BodyLen())
+func (s asn1Structured) FullLen() (res int) {
+	length := s.BodyLen()
+	return s.BodyLen() + len(s.tagBytes) + len(encodeLength(length))
 }
 
 func (s asn1Structured) EncodeTo(out io.Writer) (err error) {
-	//fmt.Printf("%s--> tag: % X\n", strings.Repeat("| ", encodeIndent), s.tagBytes)
 	if _, err = out.Write(s.tagBytes); err != nil {
 		return
 	}
-	if err = encodeLength(out, s.BodyLen()); err != nil {
+	if _, err = out.Write(encodeLength(s.BodyLen())); err != nil {
 		return
 	}
 	for _, obj := range s.content {
@@ -55,12 +55,11 @@ func (p asn1Primitive) EncodeTo(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = encodeLength(out, p.BodyLen()); err != nil {
+	if _, err = out.Write(encodeLength(p.BodyLen())); err != nil {
 		return err
 	}
-	out.Write(p.content)
-
-	return nil
+	_, err = out.Write(p.content)
+	return err
 }
 
 func (p asn1Primitive) BodyLen() int {
@@ -68,7 +67,8 @@ func (p asn1Primitive) BodyLen() int {
 }
 
 func (p asn1Primitive) FullLen() int {
-	return p.BodyLen() + len(p.tagBytes) + lengthLength(p.BodyLen())
+	length := p.BodyLen()
+	return p.BodyLen() + len(p.tagBytes) + len(encodeLength(length))
 }
 
 func ber2der(ber []byte) ([]byte, error) {
@@ -89,20 +89,6 @@ func ber2der(ber []byte) ([]byte, error) {
 	//}
 
 	return out.Bytes(), nil
-}
-
-// encodes lengths that are longer than 127 into string of bytes
-func marshalLongLength(out io.Writer, i int) (err error) {
-	n := lengthLength(i)
-
-	for ; n > 0; n-- {
-		_, err = out.Write([]byte{byte(i >> uint((n-1)*8))})
-		if err != nil {
-			return
-		}
-	}
-
-	return nil
 }
 
 // computes the byte length of an encoded length value
@@ -129,17 +115,19 @@ func lengthLength(i int) (numBytes int) {
 //  200    | 0x81   | 0xC8
 //  500    | 0x82   | 0x01 0xF4
 //
-func encodeLength(out io.Writer, length int) (err error) {
+func encodeLength(length int) (res []byte) {
 	if length < 128 {
-		_, err = out.Write([]byte{byte(length)})
-		return err
-	}
-	l := lengthLength(length)
-	_, err = out.Write([]byte{0x80 | byte(l)})
-	if err != nil {
+		res = []byte{byte(length)}
 		return
 	}
-	return marshalLongLength(out, length)
+	n := lengthLength(length)
+	res = make([]byte, n+1)
+	res[0] = 0x80 | byte(n)
+	for i := 0; i < n; i++ {
+		res[n-i] = byte(length)
+		length >>= 8
+	}
+	return
 }
 
 func readObject(ber []byte, offset int) (asn1Object, int, error) {
