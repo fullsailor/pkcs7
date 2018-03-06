@@ -53,7 +53,7 @@ func TestVerifyEC2(t *testing.T) {
 	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %v", err)
 	}
 	p7.Certificates = []*x509.Certificate{fixture.Certificate}
 	if err := p7.Verify(); err != nil {
@@ -65,7 +65,7 @@ func TestVerifyAppStore(t *testing.T) {
 	fixture := UnmarshalTestFixture(AppStoreRecieptFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %v", err)
 	}
 	if err := p7.Verify(); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
@@ -338,6 +338,9 @@ func TestUnmarshalSignedAttribute(t *testing.T) {
 		t.Fatalf("Cannot finish signing data: %s", err)
 	}
 	p7, err := Parse(signed)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 	var actual string
 	err = p7.UnmarshalSignedAttribute(oidTest, &actual)
 	if err != nil {
