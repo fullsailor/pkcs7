@@ -120,7 +120,7 @@ type signerInfo struct {
 	UnauthenticatedAttributes []attribute `asn1:"optional,tag:1"`
 }
 
-// Parse decodes a DER encoded PKCS7 package
+// Parse decodes a BER encoded PKCS7 package
 func Parse(data []byte) (p7 *PKCS7, err error) {
 	if len(data) == 0 {
 		return nil, errors.New("pkcs7: input data is empty")
