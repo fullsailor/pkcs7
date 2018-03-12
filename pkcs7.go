@@ -26,6 +26,7 @@ import (
 
 // PKCS7 Represents a PKCS7 structure
 type PKCS7 struct {
+	r            *berReader
 	Content      []byte
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList

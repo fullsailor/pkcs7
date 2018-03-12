@@ -2,44 +2,28 @@ package pkcs7
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 )
 
-func dump(t *testing.T, indent int, r io.Reader) error {
-	idt := ""
-	for i := 0; i < indent; i++ {
-		idt += ">"
-	}
-	err := readBER(r, func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
-		t.Logf("%sclass=%d constructed=%t tag=%d len=%d", idt, class, constructed, tag, length)
-		if length > 0 && !constructed {
-			b := make([]byte, length)
-			if _, err = r.Read(b); err != nil {
-				return nil
-			}
-			t.Logf("%sdata(%d): %v", idt, len(b), b)
-			return nil
-		}
-		for {
-			switch err = dump(t, indent+1, rest); err {
-			case io.EOF:
-				return nil
-			case nil:
-				break
-			default:
+func TestReadBER(t *testing.T) {
+	dump := func(tags ...int) visitFunc {
+		return func(r io.Reader, length int) (n int, err error) {
+			data := make([]byte, length)
+			if n, err = r.Read(data); err != nil {
 				return
 			}
+			fmt.Println(tags, length, data)
+			return
 		}
-	})
-	if err != nil && err != io.EOF {
-		t.Errorf("%s%+v", idt, err)
 	}
-	return err
-}
-
-func TestReadBER(t *testing.T) {
-	fixture := UnmarshalTestFixture(SignedTestFixture)
-	r := bytes.NewReader(fixture.Input)
-	dump(t, 0, r)
+	for _, fixture := range []string{SignedTestFixture, EC2IdentityDocumentFixture, AppStoreRecieptFixture} {
+		fixture := UnmarshalTestFixture(fixture)
+		br := newBerReader(bytes.NewReader(fixture.Input))
+		fmt.Println("***", fixture.Input)
+		if _, err := br.walk(dump); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
