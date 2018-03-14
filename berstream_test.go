@@ -7,22 +7,22 @@ import (
 	"testing"
 )
 
-func TestReadBER(t *testing.T) {
-	dump := func(tags ...int) visitFunc {
-		return func(r io.Reader, length int) (n int, err error) {
-			data := make([]byte, length)
-			if n, err = r.Read(data); err != nil {
-				return
-			}
-			fmt.Println(tags, length, data)
-			return
-		}
+func dump(r io.Reader, tag, length int) (next visitFunc, err error) {
+	next = dump
+	data := make([]byte, length)
+	if _, err = r.Read(data); err != nil {
+		return
 	}
+	fmt.Println(tag, length, data)
+	return
+}
+
+func TestReadBER(t *testing.T) {
 	for _, fixture := range []string{SignedTestFixture, EC2IdentityDocumentFixture, AppStoreRecieptFixture} {
 		fixture := UnmarshalTestFixture(fixture)
 		br := newBerReader(bytes.NewReader(fixture.Input))
-		fmt.Println("***", fixture.Input)
-		if _, err := br.walk(dump); err != nil {
+		fmt.Println("*************", fixture.Input)
+		if _, _, err := br.walk(dump); err != nil {
 			t.Fatal(err)
 		}
 	}

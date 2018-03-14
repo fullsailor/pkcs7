@@ -2,7 +2,9 @@ package pkcs7
 
 import (
 	"bufio"
+	"encoding/asn1"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -69,50 +71,81 @@ func (br *berReader) readBER(cont continuation) (err error) {
 	return cont(class, constructed, tag, length, newBerReader(br.Reader))
 }
 
-type visitFunc func(r io.Reader, length int) (int, error)
-
-type visitFuncFactory func(tags ...int) visitFunc
+type visitFunc func(r io.Reader, tag, length int) (next visitFunc, err error)
 
 var errContentEnd = errors.New("end of contents")
 
-func (br *berReader) walk(vff visitFuncFactory, path ...int) (n int, err error) {
+func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
+	next = visit
 	err = br.readBER(func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
 		if tag == 0 && length == 0 {
 			return errContentEnd
 		}
-		tags := make([]int, len(path)+1)
-		copy(tags, path)
-		tags[len(tags)-1] = tag
-		visit := vff(tags...)
 		if !constructed {
 			if length == -1 {
 				return errors.New("indefinite length object must be constructed")
 			}
-			n, err = visit(br, length)
+			n = length
+			next, err = visit(br, tag, length)
 			return
 		}
 		var nn int
 	loop:
 		for n < length || length == -1 {
 			br := &berReader{Reader: br.Reader}
-			nn, err = br.walk(vff, tags...)
-			switch err {
-			case errContentEnd:
+			nn, next, err = br.walk(next)
+			n += br.bytesRead
+			switch {
+			case err == errContentEnd:
 				err = nil
 				break loop
-			case nil:
+			case next == nil:
+				return
+			case err == nil:
 				break
 			default:
 				return
 			}
-			n += nn + br.bytesRead
+			n += nn
 		}
 		return
 	})
 	return
 }
 
-// NewDecoder returns new unparsed CMS struct
-func NewDecoder(r io.Reader) *PKCS7 {
-	return &PKCS7{r: newBerReader(r)}
+func (br *berReader) explicit(optional bool, expected int, trueCont, falseCont continuation) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) error {
+		if tag == expected {
+			return br.readBER(trueCont)
+		}
+		if !optional {
+			return fmt.Errorf("unexpected tag: %d", tag)
+		}
+		return falseCont(class, constructed, tag, length, rest)
+	}
+}
+
+func (br *berReader) oid(expected asn1.ObjectIdentifier, trueCont, falseCont continuation) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+		if tag != 6 {
+			return fmt.Errorf("unexpected tag: %d", tag)
+		}
+		if length > 127 {
+			return fmt.Errorf("OID bytes too long: %d", length)
+		}
+		data := make([]byte, length+2)
+		if _, err = rest.Read(data[2:]); err != nil {
+			return
+		}
+		data[0] = 6
+		data[1] = byte(length)
+		var id asn1.ObjectIdentifier
+		if _, err = asn1.Unmarshal(data, &id); err != nil {
+			return
+		}
+		if id.Equal(expected) {
+			return br.readBER(trueCont)
+		}
+		return br.readBER(falseCont)
+	}
 }
