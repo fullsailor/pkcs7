@@ -113,39 +113,45 @@ func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
 	return
 }
 
-func (br *berReader) explicit(optional bool, expected int, trueCont, falseCont continuation) continuation {
+type predicate func(class int, constructed bool, tag int, length int) bool
+
+func (br *berReader) fork(p predicate, trueCont, falseCont continuation) continuation {
 	return func(class int, constructed bool, tag int, length int, rest io.Reader) error {
-		if tag == expected {
+		if p(class, constructed, tag, length) {
 			return br.readBER(trueCont)
-		}
-		if !optional {
-			return fmt.Errorf("unexpected tag: %d", tag)
 		}
 		return falseCont(class, constructed, tag, length, rest)
 	}
 }
 
-func (br *berReader) oid(expected asn1.ObjectIdentifier, trueCont, falseCont continuation) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+func (br *berReader) must(p predicate, next continuation) continuation {
+	errCont := func(class int, constructed bool, tag int, length int, rest io.Reader) error {
+		return fmt.Errorf("predicate must match in tag %d", tag)
+	}
+	return br.fork(p, next, errCont)
+}
+
+func (br *berReader) tag(expected int) predicate {
+	return func(class int, constructed bool, tag int, length int) bool {
+		return expected == tag
+	}
+}
+
+func (br *berReader) oid(expected asn1.ObjectIdentifier) predicate {
+	return func(class int, constructed bool, tag int, length int) bool {
 		if tag != 6 {
-			return fmt.Errorf("unexpected tag: %d", tag)
+			return false
 		}
 		if length > 127 {
-			return fmt.Errorf("OID bytes too long: %d", length)
+			return false
 		}
 		data := make([]byte, length+2)
-		if _, err = rest.Read(data[2:]); err != nil {
-			return
-		}
+		oidBytes, _ := br.Peek(length)
 		data[0] = 6
 		data[1] = byte(length)
+		copy(data[2:], oidBytes)
 		var id asn1.ObjectIdentifier
-		if _, err = asn1.Unmarshal(data, &id); err != nil {
-			return
-		}
-		if id.Equal(expected) {
-			return br.readBER(trueCont)
-		}
-		return br.readBER(falseCont)
+		asn1.Unmarshal(data, &id)
+		return id.Equal(expected)
 	}
 }
