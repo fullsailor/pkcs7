@@ -90,7 +90,7 @@ func encodeMeta(w io.Writer, class int, constructed bool, tag int, length int) (
 	return
 }
 
-type continuation func(class int, constructed bool, tag int, length int, rest io.Reader) error
+type continuation func(class int, constructed bool, tag int, length int) error
 
 func (br *berReader) readBER(cont continuation) (err error) {
 	b, err := br.ReadByte()
@@ -128,7 +128,7 @@ func (br *berReader) readBER(cont continuation) (err error) {
 			length = length*256 + int(b)
 		}
 	}
-	return cont(class, constructed, tag, length, newBerReader(br.Reader))
+	return cont(class, constructed, tag, length)
 }
 
 type visitFunc func(r io.Reader, tag, length int) (next visitFunc, err error)
@@ -137,7 +137,7 @@ var errContentEnd = errors.New("end of contents")
 
 func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
 	next = visit
-	err = br.readBER(func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+	err = br.readBER(func(class int, constructed bool, tag int, length int) (err error) {
 		if tag == 0 && length == 0 {
 			return errContentEnd
 		}
@@ -173,46 +173,57 @@ func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
 	return
 }
 
+type predicateError string
+
+func (pe predicateError) Error() string {
+	return string(pe)
+}
+
+func perr(f string, vs ...interface{}) error {
+	return predicateError(fmt.Sprintf(f, vs...))
+}
+
 type predicate func(class int, constructed bool, tag int, length int) error
 
-var errFalse = errors.New("condition not met")
-
-func (br *berReader) cond(p predicate, trueCont, falseCont continuation) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
-		if err = p(class, constructed, tag, length); err == errFalse {
-			return falseCont(class, constructed, tag, length, rest)
-		} else if err != nil {
-			return
+func (br *berReader) optional(next continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		err = next(class, constructed, tag, length)
+		if _, ok := err.(predicateError); ok {
+			return nil
 		}
-		return trueCont(class, constructed, tag, length, rest)
+		return
 	}
 }
 
-func (br *berReader) tag(expected int, optional bool) predicate {
+func (br *berReader) branch(p predicate, trueCont continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		if err = p(class, constructed, tag, length); err != nil {
+			return
+		}
+		return trueCont(class, constructed, tag, length)
+	}
+}
+
+func (br *berReader) tag(expected int) predicate {
 	return func(class int, constructed bool, tag int, length int) error {
 		if expected == tag {
 			return nil
 		}
-		if !optional {
-			return fmt.Errorf("expected tag %d got %d", expected, tag)
-		}
-		return errFalse
+		return perr("expected tag %d got %d", expected, tag)
 	}
 }
 
-func (br *berReader) explicit(p predicate, next continuation) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
-		if err = p(class, constructed, tag, length); err == errFalse {
-			return nil
-		} else if err != nil {
-			return
+func (br *berReader) explicit(expected int, next continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		if expected != tag {
+			return perr("expected explicit tag %d got %d", expected, tag)
 		}
 		return br.readBER(next)
 	}
 }
 
 func (br *berReader) parseASN1(dest interface{}, params string) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+	return func(class int, constructed bool, tag int, length int) (err error) {
 		if length < 0 {
 			return fmt.Errorf("tag %d is indefinite length", tag)
 		}
@@ -220,7 +231,7 @@ func (br *berReader) parseASN1(dest interface{}, params string) continuation {
 		if err = encodeMeta(&buf, class, constructed, tag, length); err != nil {
 			return
 		}
-		if _, err = io.Copy(&buf, io.LimitReader(rest, int64(length))); err != nil {
+		if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
 			return
 		}
 		_, err = asn1.UnmarshalWithParams(buf.Bytes(), dest, params)
@@ -228,33 +239,31 @@ func (br *berReader) parseASN1(dest interface{}, params string) continuation {
 	}
 }
 
-func (br *berReader) oid(oid asn1.ObjectIdentifier, optional bool) predicate {
-	return func(class int, constructed bool, tag int, length int) (err error) {
-		if tag != 6 {
-			return fmt.Errorf("expected oid %s got tag %d", oid, tag)
-		}
-		var actual asn1.ObjectIdentifier
-		if err = br.readBER(br.parseASN1(&actual, "")); err != nil {
-			return
-		}
-		if !actual.Equal(oid) {
-			if !optional {
-				return fmt.Errorf("expected oid %q got oid %q", oid, actual)
+func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuation {
+	return br.sequence(
+		func(class int, constructed bool, tag int, length int) (err error) {
+			if tag != 6 {
+				return perr("expected oid %s got tag %d", oid, tag)
 			}
-			return errFalse
-		}
-		return nil
-	}
+			var actual asn1.ObjectIdentifier
+			if err = br.parseASN1(&actual, "")(class, constructed, tag, length); err != nil {
+				return
+			}
+			if !actual.Equal(oid) {
+				return perr("expected oid %q got oid %q", oid, actual)
+			}
+			return nil
+		}, next)
 }
 
 func (br *berReader) sequence(conts ...continuation) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+	return func(class int, constructed bool, tag int, length int) (err error) {
 		if !constructed {
 			return fmt.Errorf("expected constructed object, got tag %d", tag)
 		}
 		for _, cont := range conts {
 			if err = br.readBER(cont); err != nil {
-				break
+				return
 			}
 		}
 		return
@@ -269,18 +278,16 @@ func NewDecoder(r io.Reader) *PKCS7 {
 
 func (p7 *PKCS7) verify(dest io.Writer) error {
 	br := p7.r
-	var ci contentInfo
+	var si signedData
 	err := br.readBER(
-		br.sequence(
-			br.cond(
-				br.oid(oidSignedData, true),
+		br.oid(oidSignedData,
+			br.explicit(0,
 				br.sequence(
-					br.parseASN1(&ci, "explicit,optional,tag:0"),
+					br.parseASN1(&si.Version, ""),
 				),
-				nil,
 			),
 		),
 	)
-	fmt.Println(ci, err)
+	fmt.Println(si, err)
 	return err
 }
