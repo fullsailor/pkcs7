@@ -222,7 +222,14 @@ func (br *berReader) explicit(expected int, next continuation) continuation {
 	}
 }
 
-func (br *berReader) parseASN1(dest interface{}, params string) continuation {
+func (br *berReader) object(dest interface{}, params string) continuation {
+	return br.raw(func(data []byte) (err error) {
+		_, err = asn1.UnmarshalWithParams(data, dest, params)
+		return
+	})
+}
+
+func (br *berReader) raw(process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if length < 0 {
 			return fmt.Errorf("tag %d is indefinite length", tag)
@@ -234,8 +241,7 @@ func (br *berReader) parseASN1(dest interface{}, params string) continuation {
 		if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
 			return
 		}
-		_, err = asn1.UnmarshalWithParams(buf.Bytes(), dest, params)
-		return
+		return process(buf.Bytes())
 	}
 }
 
@@ -246,7 +252,7 @@ func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuat
 				return perr("expected oid %s got tag %d", oid, tag)
 			}
 			var actual asn1.ObjectIdentifier
-			if err = br.parseASN1(&actual, "")(class, constructed, tag, length); err != nil {
+			if err = br.object(&actual, "")(class, constructed, tag, length); err != nil {
 				return
 			}
 			if !actual.Equal(oid) {
@@ -279,15 +285,37 @@ func NewDecoder(r io.Reader) *PKCS7 {
 func (p7 *PKCS7) verify(dest io.Writer) error {
 	br := p7.r
 	var si signedData
+	var data []byte
 	err := br.readBER(
 		br.oid(oidSignedData,
 			br.explicit(0,
 				br.sequence(
-					br.parseASN1(&si.Version, ""),
+					br.object(&si.Version, ""),
+					br.object(&si.DigestAlgorithmIdentifiers, "set"),
+					br.sequence(
+						br.object(&si.ContentInfo.ContentType, ""),
+						br.optional(
+							br.explicit(0,
+								br.raw(func(data []byte) (err error) {
+									return nil
+								}),
+							),
+						),
+					),
+					br.explicit(0,
+						//                         func(class int, constructed bool, tag int, length int) (err error) {
+						//                             fmt.Println("tag:", tag, length, constructed, class)
+						//                             return nil
+						//                         },
+						br.raw(func(data []byte) (err error) {
+							fmt.Println(data)
+							return
+						}),
+					),
 				),
 			),
 		),
 	)
-	fmt.Println(si, err)
+	fmt.Println(si, data, err)
 	return err
 }
