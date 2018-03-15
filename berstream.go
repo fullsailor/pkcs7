@@ -2,16 +2,20 @@ package pkcs7
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/asn1"
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 )
 
 type berReader struct {
 	*bufio.Reader
 	bytesRead int
 }
+
+var nameRe = regexp.MustCompile(`((\w+)(\.\w+)?\)?)([-][^-]*)?$`)
 
 func newBerReader(r io.Reader) *berReader {
 	return &berReader{Reader: bufio.NewReader(r)}
@@ -27,6 +31,62 @@ func (br *berReader) ReadByte() (res byte, err error) {
 func (br *berReader) Read(dest []byte) (n int, err error) {
 	n, err = br.Reader.Read(dest)
 	br.bytesRead += n
+	return
+}
+
+func base128IntLength(n int64) int {
+	if n == 0 {
+		return 1
+	}
+
+	l := 0
+	for i := n; i > 0; i >>= 7 {
+		l++
+	}
+
+	return l
+}
+
+func appendBase128Int(dst []byte, n int64) []byte {
+	l := base128IntLength(n)
+
+	for i := l - 1; i >= 0; i-- {
+		o := byte(n >> uint(i*7))
+		o &= 0x7f
+		if i != 0 {
+			o |= 0x80
+		}
+
+		dst = append(dst, o)
+	}
+
+	return dst
+}
+
+func encodeMeta(w io.Writer, class int, constructed bool, tag int, length int) (err error) {
+	var dst []byte
+	b := uint8(class) << 6
+	if constructed {
+		b |= 0x20
+	}
+	if tag >= 31 {
+		b |= 0x1f
+		dst = append(dst, b)
+		dst = appendBase128Int(dst, int64(tag))
+	} else {
+		b |= uint8(tag)
+		dst = append(dst, b)
+	}
+	if length >= 128 {
+		l := lengthLength(length)
+		dst = append(dst, 0x80|byte(l))
+		for n := l; n > 0; n-- {
+			dst = append(dst, byte(l>>uint((n-1)*8)))
+		}
+	} else {
+		dst = append(dst, byte(length))
+	}
+	_, err = w.Write(dst)
 	return
 }
 
@@ -113,45 +173,114 @@ func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
 	return
 }
 
-type predicate func(class int, constructed bool, tag int, length int) bool
+type predicate func(class int, constructed bool, tag int, length int) error
 
-func (br *berReader) fork(p predicate, trueCont, falseCont continuation) continuation {
-	return func(class int, constructed bool, tag int, length int, rest io.Reader) error {
-		if p(class, constructed, tag, length) {
-			return br.readBER(trueCont)
+var errFalse = errors.New("condition not met")
+
+func (br *berReader) cond(p predicate, trueCont, falseCont continuation) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+		if err = p(class, constructed, tag, length); err == errFalse {
+			return falseCont(class, constructed, tag, length, rest)
+		} else if err != nil {
+			return
 		}
-		return falseCont(class, constructed, tag, length, rest)
+		return trueCont(class, constructed, tag, length, rest)
 	}
 }
 
-func (br *berReader) must(p predicate, next continuation) continuation {
-	errCont := func(class int, constructed bool, tag int, length int, rest io.Reader) error {
-		return fmt.Errorf("predicate must match in tag %d", tag)
+func (br *berReader) tag(expected int, optional bool) predicate {
+	return func(class int, constructed bool, tag int, length int) error {
+		if expected == tag {
+			return nil
+		}
+		if !optional {
+			return fmt.Errorf("expected tag %d got %d", expected, tag)
+		}
+		return errFalse
 	}
-	return br.fork(p, next, errCont)
 }
 
-func (br *berReader) tag(expected int) predicate {
-	return func(class int, constructed bool, tag int, length int) bool {
-		return expected == tag
+func (br *berReader) explicit(p predicate, next continuation) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+		if err = p(class, constructed, tag, length); err == errFalse {
+			return nil
+		} else if err != nil {
+			return
+		}
+		return br.readBER(next)
 	}
 }
 
-func (br *berReader) oid(expected asn1.ObjectIdentifier) predicate {
-	return func(class int, constructed bool, tag int, length int) bool {
+func (br *berReader) parseASN1(dest interface{}, params string) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+		if length < 0 {
+			return fmt.Errorf("tag %d is indefinite length", tag)
+		}
+		var buf bytes.Buffer
+		if err = encodeMeta(&buf, class, constructed, tag, length); err != nil {
+			return
+		}
+		if _, err = io.Copy(&buf, io.LimitReader(rest, int64(length))); err != nil {
+			return
+		}
+		_, err = asn1.UnmarshalWithParams(buf.Bytes(), dest, params)
+		return
+	}
+}
+
+func (br *berReader) oid(oid asn1.ObjectIdentifier, optional bool) predicate {
+	return func(class int, constructed bool, tag int, length int) (err error) {
 		if tag != 6 {
-			return false
+			return fmt.Errorf("expected oid %s got tag %d", oid, tag)
 		}
-		if length > 127 {
-			return false
+		var actual asn1.ObjectIdentifier
+		if err = br.readBER(br.parseASN1(&actual, "")); err != nil {
+			return
 		}
-		data := make([]byte, length+2)
-		oidBytes, _ := br.Peek(length)
-		data[0] = 6
-		data[1] = byte(length)
-		copy(data[2:], oidBytes)
-		var id asn1.ObjectIdentifier
-		asn1.Unmarshal(data, &id)
-		return id.Equal(expected)
+		if !actual.Equal(oid) {
+			if !optional {
+				return fmt.Errorf("expected oid %q got oid %q", oid, actual)
+			}
+			return errFalse
+		}
+		return nil
 	}
+}
+
+func (br *berReader) sequence(conts ...continuation) continuation {
+	return func(class int, constructed bool, tag int, length int, rest io.Reader) (err error) {
+		if !constructed {
+			return fmt.Errorf("expected constructed object, got tag %d", tag)
+		}
+		for _, cont := range conts {
+			if err = br.readBER(cont); err != nil {
+				break
+			}
+		}
+		return
+	}
+}
+
+func NewDecoder(r io.Reader) *PKCS7 {
+	return &PKCS7{
+		r: newBerReader(r),
+	}
+}
+
+func (p7 *PKCS7) verify(dest io.Writer) error {
+	br := p7.r
+	var ci contentInfo
+	err := br.readBER(
+		br.sequence(
+			br.cond(
+				br.oid(oidSignedData, true),
+				br.sequence(
+					br.parseASN1(&ci, "explicit,optional,tag:0"),
+				),
+				nil,
+			),
+		),
+	)
+	fmt.Println(ci, err)
+	return err
 }

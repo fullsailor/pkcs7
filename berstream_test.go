@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"testing"
 )
 
@@ -20,10 +21,9 @@ func dump(r io.Reader, tag, length int) (next visitFunc, err error) {
 func TestReadBER(t *testing.T) {
 	for _, fixture := range []string{SignedTestFixture, EC2IdentityDocumentFixture, AppStoreRecieptFixture} {
 		fixture := UnmarshalTestFixture(fixture)
-		br := newBerReader(bytes.NewReader(fixture.Input))
-		fmt.Println("*************", fixture.Input)
-		if _, _, err := br.walk(dump); err != nil {
-			t.Fatal(err)
+		p7 := NewDecoder(bytes.NewReader(fixture.Input))
+		if err := p7.verify(ioutil.Discard); err != nil {
+			t.Errorf("%+v", err)
 		}
 	}
 }
