@@ -4,18 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/asn1"
-	"errors"
 	"fmt"
+	"hash"
 	"io"
-	"regexp"
+
+	"github.com/pkg/errors"
 )
 
 type berReader struct {
 	*bufio.Reader
 	bytesRead int
 }
-
-var nameRe = regexp.MustCompile(`((\w+)(\.\w+)?\)?)([-][^-]*)?$`)
 
 func newBerReader(r io.Reader) *berReader {
 	return &berReader{Reader: bufio.NewReader(r)}
@@ -81,7 +80,7 @@ func encodeMeta(w io.Writer, class int, constructed bool, tag int, length int) (
 		l := lengthLength(length)
 		dst = append(dst, 0x80|byte(l))
 		for n := l; n > 0; n-- {
-			dst = append(dst, byte(l>>uint((n-1)*8)))
+			dst = append(dst, byte(length>>uint((n-1)*8)))
 		}
 	} else {
 		dst = append(dst, byte(length))
@@ -131,48 +130,6 @@ func (br *berReader) readBER(cont continuation) (err error) {
 	return cont(class, constructed, tag, length)
 }
 
-type visitFunc func(r io.Reader, tag, length int) (next visitFunc, err error)
-
-var errContentEnd = errors.New("end of contents")
-
-func (br *berReader) walk(visit visitFunc) (n int, next visitFunc, err error) {
-	next = visit
-	err = br.readBER(func(class int, constructed bool, tag int, length int) (err error) {
-		if tag == 0 && length == 0 {
-			return errContentEnd
-		}
-		if !constructed {
-			if length == -1 {
-				return errors.New("indefinite length object must be constructed")
-			}
-			n = length
-			next, err = visit(br, tag, length)
-			return
-		}
-		var nn int
-	loop:
-		for n < length || length == -1 {
-			br := &berReader{Reader: br.Reader}
-			nn, next, err = br.walk(next)
-			n += br.bytesRead
-			switch {
-			case err == errContentEnd:
-				err = nil
-				break loop
-			case next == nil:
-				return
-			case err == nil:
-				break
-			default:
-				return
-			}
-			n += nn
-		}
-		return
-	})
-	return
-}
-
 type predicateError string
 
 func (pe predicateError) Error() string {
@@ -188,19 +145,10 @@ type predicate func(class int, constructed bool, tag int, length int) error
 func (br *berReader) optional(next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		err = next(class, constructed, tag, length)
-		if _, ok := err.(predicateError); ok {
+		if _, ok := errors.Cause(err).(predicateError); ok {
 			return nil
 		}
 		return
-	}
-}
-
-func (br *berReader) branch(p predicate, trueCont continuation) continuation {
-	return func(class int, constructed bool, tag int, length int) (err error) {
-		if err = p(class, constructed, tag, length); err != nil {
-			return
-		}
-		return trueCont(class, constructed, tag, length)
 	}
 }
 
@@ -209,39 +157,64 @@ func (br *berReader) tag(expected int) predicate {
 		if expected == tag {
 			return nil
 		}
-		return perr("expected tag %d got %d", expected, tag)
+		return errors.Wrap(perr("expected tag %d got %d", expected, tag), "tag")
 	}
 }
 
 func (br *berReader) explicit(expected int, next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
+		fmt.Println("*** explicit ", tag, expected)
 		if expected != tag {
-			return perr("expected explicit tag %d got %d", expected, tag)
+			return errors.Wrap(perr("expected explicit tag %d got %d", expected, tag), "explicit")
 		}
-		return br.readBER(next)
+		return errors.WithMessage(br.readBER(next), "explicit")
 	}
 }
 
 func (br *berReader) object(dest interface{}, params string) continuation {
 	return br.raw(func(data []byte) (err error) {
 		_, err = asn1.UnmarshalWithParams(data, dest, params)
-		return
+		if err != nil {
+			fmt.Println("***", data)
+		}
+		return errors.Wrap(err, "object")
+	})
+}
+
+func (br *berReader) endOctets() continuation {
+	return br.raw(func(data []byte) error {
+		if !bytes.Equal(data, []byte{0, 0}) {
+			return errors.Wrap(perr("expected end octets got %v", data), "endOctets")
+		}
+		return nil
 	})
 }
 
 func (br *berReader) raw(process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if length < 0 {
-			return fmt.Errorf("tag %d is indefinite length", tag)
+			return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
 		}
 		var buf bytes.Buffer
 		if err = encodeMeta(&buf, class, constructed, tag, length); err != nil {
-			return
+			return errors.Wrap(err, "raw")
 		}
 		if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
-			return
+			return errors.Wrap(err, "raw")
 		}
-		return process(buf.Bytes())
+		return errors.Wrap(process(buf.Bytes()), "raw")
+	}
+}
+
+func (br *berReader) octets(next continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		if tag != 4 {
+			return errors.Wrap(perr("expected tag 4 got %d", tag), "octets")
+		}
+		if length < 0 {
+			return errors.WithMessage(br.readBER(next), "octets")
+		}
+		return errors.WithMessage(next(class, constructed, tag, length), "octets")
 	}
 }
 
@@ -249,14 +222,14 @@ func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuat
 	return br.sequence(
 		func(class int, constructed bool, tag int, length int) (err error) {
 			if tag != 6 {
-				return perr("expected oid %s got tag %d", oid, tag)
+				return errors.Wrap(perr("expected oid %s got tag %d", oid, tag), "oid")
 			}
 			var actual asn1.ObjectIdentifier
 			if err = br.object(&actual, "")(class, constructed, tag, length); err != nil {
-				return
+				return errors.WithMessage(err, "oid")
 			}
 			if !actual.Equal(oid) {
-				return perr("expected oid %q got oid %q", oid, actual)
+				return errors.Wrap(perr("expected oid %q got oid %q", oid, actual), "oid")
 			}
 			return nil
 		}, next)
@@ -265,11 +238,15 @@ func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuat
 func (br *berReader) sequence(conts ...continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if !constructed {
-			return fmt.Errorf("expected constructed object, got tag %d", tag)
+			return errors.Wrap(fmt.Errorf("expected constructed object, got tag %d", tag), "sequence")
+		}
+		if length < 0 {
+			conts = append(conts, br.endOctets())
 		}
 		for _, cont := range conts {
-			if err = br.readBER(cont); err != nil {
-				return
+			err = br.readBER(cont)
+			if err != nil {
+				return errors.WithMessage(err, "sequence")
 			}
 		}
 		return
@@ -282,40 +259,66 @@ func NewDecoder(r io.Reader) *PKCS7 {
 	}
 }
 
+func (p7 *PKCS7) buildHashes(dest io.Writer) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		r := io.LimitReader(p7.r, int64(length))
+		for _, h := range p7.hashes {
+			r = io.TeeReader(r, h)
+		}
+		_, err = io.Copy(dest, r)
+		return errors.Wrap(err, "buildHashes")
+	}
+}
+
+func (p7 *PKCS7) initHashes(class int, constructed bool, tag int, length int) (err error) {
+	if err = p7.r.object(&p7.digestAlgorithmIdentifiers, "set")(class, constructed, tag, length); err != nil {
+		return errors.Wrap(err, "initHashes")
+	}
+	p7.hashes = make(map[string]hash.Hash)
+	for _, aid := range p7.digestAlgorithmIdentifiers {
+		hash, err := getHashForOID(aid.Algorithm)
+		if err != nil {
+			return errors.Wrap(err, "initHashes: getHashForOID")
+		}
+		p7.hashes[aid.Algorithm.String()] = hash.New()
+	}
+	return
+}
+
 func (p7 *PKCS7) verify(dest io.Writer) error {
 	br := p7.r
 	var si signedData
-	var data []byte
 	err := br.readBER(
 		br.oid(oidSignedData,
 			br.explicit(0,
 				br.sequence(
 					br.object(&si.Version, ""),
-					br.object(&si.DigestAlgorithmIdentifiers, "set"),
+					p7.initHashes,
 					br.sequence(
 						br.object(&si.ContentInfo.ContentType, ""),
 						br.optional(
 							br.explicit(0,
-								br.raw(func(data []byte) (err error) {
-									return nil
-								}),
+								br.octets(
+									p7.buildHashes(dest),
+								),
 							),
 						),
 					),
-					br.explicit(0,
-						//                         func(class int, constructed bool, tag int, length int) (err error) {
-						//                             fmt.Println("tag:", tag, length, constructed, class)
-						//                             return nil
-						//                         },
-						br.raw(func(data []byte) (err error) {
-							fmt.Println(data)
-							return
-						}),
-					),
+					br.raw(func(data []byte) (err error) {
+						si.Certificates.Raw = data
+						p7.Certificates, err = si.Certificates.Parse()
+						return
+					}),
+					br.optional(br.explicit(1, br.object(&si.CRLs, ""))),
+					br.object(&si.SignerInfos, "set"),
 				),
 			),
 		),
 	)
-	fmt.Println(si, data, err)
+	//     data, _ := json.MarshalIndent(p7, "", "\t")
+	//     fmt.Println(string(data))
+	for _, h := range p7.hashes {
+		fmt.Println(h.Sum(nil))
+	}
 	return err
 }

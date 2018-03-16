@@ -15,6 +15,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"hash"
 	"math/big"
 	"sort"
 	"time"
@@ -26,12 +27,14 @@ import (
 
 // PKCS7 Represents a PKCS7 structure
 type PKCS7 struct {
-	r            *berReader
-	Content      []byte
-	Certificates []*x509.Certificate
-	CRLs         []pkix.CertificateList
-	Signers      []signerInfo
-	raw          interface{}
+	r                          *berReader
+	Content                    []byte
+	Certificates               []*x509.Certificate
+	CRLs                       []pkix.CertificateList
+	Signers                    []signerInfo
+	digestAlgorithmIdentifiers []pkix.AlgorithmIdentifier `asn1:"set"`
+	hashes                     map[string]hash.Hash
+	raw                        interface{}
 }
 
 type contentInfo struct {
