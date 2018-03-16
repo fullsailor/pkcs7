@@ -33,7 +33,7 @@ type PKCS7 struct {
 	CRLs                       []pkix.CertificateList
 	Signers                    []signerInfo
 	digestAlgorithmIdentifiers []pkix.AlgorithmIdentifier `asn1:"set"`
-	hashes                     map[string]hash.Hash
+	hashes                     map[crypto.Hash]hash.Hash
 	raw                        interface{}
 }
 

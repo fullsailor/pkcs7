@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-func BenchmarkVerify(b *testing.B) {
+func BenchmarkVerifyOld(b *testing.B) {
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
