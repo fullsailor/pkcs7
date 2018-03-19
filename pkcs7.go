@@ -13,7 +13,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"errors"
 	"fmt"
 	"hash"
 	"math/big"
@@ -23,6 +22,8 @@ import (
 	_ "crypto/sha1"   // for crypto.SHA1
 	_ "crypto/sha256" // for crypto.SHA256
 	_ "crypto/sha512" // for crypto.SHA512 and crypto.SHA384
+
+	"github.com/pkg/errors"
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -195,10 +196,12 @@ func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 
 	var val asn1.RawValue
 	if _, err := asn1.Unmarshal(raw.Raw, &val); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "unmarshaling asn1")
 	}
 
-	return x509.ParseCertificates(val.Bytes)
+	res, err := x509.ParseCertificates(val.Bytes)
+	err = errors.Wrap(err, "parsing x509 certificates")
+	return res, err
 }
 
 func parseEnvelopedData(data []byte) (*PKCS7, error) {
@@ -273,7 +276,7 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 		A []attribute `asn1:"set"`
 	}{A: attrs})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "marshaling attributes")
 	}
 
 	// Remove the leading sequence octets
@@ -310,7 +313,7 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	case oid.Equal(oidSHA512):
 		return crypto.SHA512, nil
 	}
-	return crypto.Hash(0), ErrUnsupportedAlgorithm
+	return crypto.Hash(0), errors.Wrap(ErrUnsupportedAlgorithm, "getting hash for OID")
 }
 
 func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
@@ -540,6 +543,7 @@ type SignedData struct {
 	certs         []*x509.Certificate
 	messageDigest []byte
 	hashes        map[crypto.Hash]hash.Hash
+	pkeys         []crypto.PrivateKey
 }
 
 // Attribute represents a key value pair attribute. Value must be marshalable byte
@@ -623,7 +627,7 @@ func (attrs *attributes) ForMarshaling() ([]attribute, error) {
 		attrValue := attrs.values[i]
 		asn1Value, err := asn1.Marshal(attrValue)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "marshaling value for %v", attrType)
 		}
 		attr := attribute{
 			Type:  attrType,
@@ -631,7 +635,7 @@ func (attrs *attributes) ForMarshaling() ([]attribute, error) {
 		}
 		encoded, err := asn1.Marshal(attr)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "marshaling attribute %v", attr)
 		}
 		sortables[i] = sortableAttribute{
 			SortKey:   encoded,
@@ -657,7 +661,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	}
 	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA256)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "signing attrs")
 	}
 
 	ias, err := cert2issuerAndSerial(cert)
@@ -676,6 +680,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	// create signature of signed attributes
 	sd.certs = append(sd.certs, cert)
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
+	sd.pkeys = append(sd.pkeys, pkey)
 	return nil
 }
 
@@ -725,9 +730,11 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, hash crypto.Hash)
 	hashed := h.Sum(nil)
 	switch priv := pkey.(type) {
 	case *rsa.PrivateKey:
-		return rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, hashed)
+		data, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, hashed)
+		err = errors.Wrap(err, "signing pkcs15")
+		return data, err
 	}
-	return nil, ErrUnsupportedAlgorithm
+	return nil, errors.Wrap(ErrUnsupportedAlgorithm, "signing attributes")
 }
 
 // concats and wraps the certificates in the RawValue structure

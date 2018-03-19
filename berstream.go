@@ -133,7 +133,21 @@ func (br *berReader) endOctets() continuation {
 func (br *berReader) raw(expected int, optional bool, process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if length < 0 {
-			return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
+			if !constructed {
+				return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
+			}
+			var buf bytes.Buffer
+			for {
+				if err = br.readBER(br.raw(-1, true, func(data []byte) error {
+					if bytes.Equal(data, []byte{0, 0}) {
+						break
+					}
+					buf.Write(data)
+					return nil
+				})); err != nil {
+					return
+				}
+			}
 		}
 		if expected > 0 && tag != expected {
 			if !optional {
@@ -148,7 +162,7 @@ func (br *berReader) raw(expected int, optional bool, process func([]byte) error
 		if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
 			return errors.Wrap(err, "raw")
 		}
-		return errors.Wrap(process(buf.Bytes()), "raw")
+		return errors.WithMessage(process(buf.Bytes()), "raw")
 	}
 }
 

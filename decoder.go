@@ -32,13 +32,13 @@ func (p7 *PKCS7) buildHashes(dest io.Writer) continuation {
 
 func (p7 *PKCS7) initHashes(class int, constructed bool, tag int, length int) (err error) {
 	if err = p7.r.object(&p7.digestAlgorithmIdentifiers, "set")(class, constructed, tag, length); err != nil {
-		return errors.Wrap(err, "initHashes")
+		return errors.WithMessage(err, "initHashes")
 	}
 	p7.hashes = make(map[crypto.Hash]hash.Hash)
 	for _, aid := range p7.digestAlgorithmIdentifiers {
 		hash, err := getHashForOID(aid.Algorithm)
 		if err != nil {
-			return errors.Wrap(err, "initHashes: getHashForOID")
+			return errors.WithMessage(err, "initHashes")
 		}
 		p7.hashes[hash] = hash.New()
 	}

@@ -2,7 +2,10 @@ package pkcs7
 
 import (
 	"encoding/asn1"
+	"fmt"
 	"io"
+
+	"github.com/pkg/errors"
 )
 
 type berWriter struct {
@@ -65,6 +68,7 @@ func encodeMeta(w io.Writer, class int, constructed bool, tag int, length int) (
 		dst = append(dst, byte(length))
 	}
 	_, err = w.Write(dst)
+	err = errors.Wrap(err, "writing meta")
 	return
 }
 
@@ -72,9 +76,10 @@ func (w *berWriter) object(val interface{}, params string) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		data, err := asn1.MarshalWithParams(val, params)
 		if err != nil {
-			return
+			return errors.Wrap(err, "marshaling asn1")
 		}
 		_, err = w.Write(data)
+		err = errors.Wrap(err, "writing data bytes")
 		return
 	}
 }
@@ -99,22 +104,30 @@ func (w *berWriter) explicit(tag int, length int, next continuation) continuatio
 	return func(class int, constructed bool, _ int, _ int) (err error) {
 		if err = encodeMeta(w, class, constructed, tag, length); err != nil {
 			return
-		} else if err = next(class, constructed, tag, length); err != nil {
+		}
+		if err = next(0, false, 0, 0); err != nil {
 			return
-		} else if length < 0 {
-			return encodeMeta(w, 0, false, 0, 0)
+		}
+		if length < 0 {
+			_, err = w.Write([]byte{0, 0})
+			return
 		}
 		return
 	}
 }
 
 func (w *berWriter) optional(tag int, next continuation) continuation {
-	return w.explicit(tag, -1, next)
+	return w.class(2, w.constructed(w.explicit(tag, -1, next)))
 }
 
-func (w *berWriter) raw(data []byte) continuation {
-	return func(class int, constructed bool, tag int, length int) (err error) {
+func (w *berWriter) raw(tag int, data []byte) continuation {
+	return func(class int, constructed bool, _ int, _ int) (err error) {
+		fmt.Println("***", tag, data[:10], len(data))
+		if err = encodeMeta(w, class, constructed, tag, len(data)); err != nil {
+			return
+		}
 		_, err = w.Write(data)
+		err = errors.Wrap(err, "writing raw bytes")
 		return
 	}
 }
