@@ -3,6 +3,9 @@ package pkcs7
 import (
 	"encoding/asn1"
 	"io"
+	"os"
+
+	"github.com/pkg/errors"
 )
 
 type berWriter struct {
@@ -116,5 +119,26 @@ func (w *berWriter) sequence(seq ...continuation) continuation {
 				return
 			},
 		),
+	)
+}
+
+func (w *berWriter) binary(r io.Reader) continuation {
+	size := -1
+	switch t := r.(type) {
+	case *os.File:
+		stat, err := t.Stat()
+		if err != nil {
+			return err
+		}
+		size = int(stat.Size())
+	case Buffer:
+		size = t.Len()
+	}
+	return w.explicit(16, size,
+		func(class int, constructed bool, tag int, length int) (err error) {
+			if size == -1 {
+				return errors.New("specified reader does not provide size")
+			}
+		},
 	)
 }

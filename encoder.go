@@ -34,19 +34,6 @@ func WithSize(r io.Reader, size int) Buffer {
 }
 
 func (sd *SignedData) Sign(r io.Reader) (err error) {
-	var size int64
-	switch t := r.(type) {
-	case *os.File:
-		stat, err := t.Stat()
-		if err != nil {
-			return err
-		}
-		size = stat.Size()
-	case Buffer:
-		size = int64(t.Len())
-	default:
-		return errors.New("provided reader has no way to specify size")
-	}
 	sd.sd.Certificates = marshalCertificates(sd.certs)
 	return nil
 }
