@@ -1,7 +1,9 @@
 package pkcs7
 
 import (
+	"crypto"
 	"errors"
+	"hash"
 	"io"
 	"os"
 )
@@ -33,9 +35,15 @@ func WithSize(r io.Reader, size int) Buffer {
 	return buf{Reader: r, size: size}
 }
 
-func (w *berWriter) signdata(r io.Reader) continuation {
+func (w *berWriter) signData(r io.Reader) continuation {
+	return w.explicit(4, 0, func(class int, constructed bool, _ int, _ int) (err error) {
+		_, err = io.Copy(w, r)
+		return err
+	})
+}
+
+func (sd *SignedData) initHashes(r io.Reader) (io.Reader, error) {
 	size := -1
-	var err error
 	switch t := r.(type) {
 	case *os.File:
 		stat, err := t.Stat()
@@ -44,25 +52,33 @@ func (w *berWriter) signdata(r io.Reader) continuation {
 		}
 	case Buffer:
 		size = t.Len()
+	default:
+		return r, errors.New("specified reader does not provide size")
 	}
-	return w.explicit(4, size, func(class int, constructed bool, _ int, _ int) error {
+	r = io.LimitReader(r, int64(size))
+	sd.hashes = make(map[crypto.Hash]hash.Hash)
+	for _, si := range sd.sd.SignerInfos {
+		hash, err := getHashForOID(si.DigestAlgorithm.Algorithm)
 		if err != nil {
-			return err
-		} else if size == -1 {
-			return errors.New("specified reader does not provide size")
+			return r, err
 		}
-		_, err = io.Copy(w, io.LimitReader(r, int64(size)))
-		return err
-	})
+		if sd.hashes[hash] == nil {
+			h := hash.New()
+			sd.hashes[hash] = h
+			r = io.TeeReader(r, h)
+			sd.sd.DigestAlgorithmIdentifiers = append(sd.sd.DigestAlgorithmIdentifiers, si.DigestAlgorithm)
+		}
+	}
+	return r, nil
 }
 
 func (sd *SignedData) SignTo(r io.Reader) (err error) {
 	version := 1
-	sd.sd.Certificates = marshalCertificates(sd.certs)
-	for _, si := range sd.sd.SignerInfos {
-		sd.sd.DigestAlgorithmIdentifiers = append(sd.sd.DigestAlgorithmIdentifiers, si.DigestAlgorithm)
-	}
 	w := sd.w
+	sd.sd.Certificates = marshalCertificates(sd.certs)
+	if r, err = sd.initHashes(r); err != nil {
+		return nil
+	}
 	return w.writeBER(
 		w.oid(oidSignedData,
 			w.optional(0,
@@ -72,7 +88,7 @@ func (sd *SignedData) SignTo(r io.Reader) (err error) {
 					w.oid(
 						oidData,
 						w.optional(0,
-							w.octets(w.signdata(r)),
+							w.octets(w.signData(r)),
 						),
 					),
 					w.raw(sd.sd.Certificates.Raw),

@@ -535,10 +535,11 @@ func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, o
 
 // SignedData is an opaque data structure for creating signed data payloads
 type SignedData struct {
-	w *berWriter
+	w             *berWriter
 	sd            signedData
 	certs         []*x509.Certificate
 	messageDigest []byte
+	hashes        map[crypto.Hash]hash.Hash
 }
 
 // Attribute represents a key value pair attribute. Value must be marshalable byte
