@@ -3,9 +3,6 @@ package pkcs7
 import (
 	"encoding/asn1"
 	"io"
-	"os"
-
-	"github.com/pkg/errors"
 )
 
 type berWriter struct {
@@ -82,6 +79,10 @@ func (w *berWriter) object(val interface{}, params string) continuation {
 	}
 }
 
+func (w *berWriter) oid(oid asn1.ObjectIdentifier, next continuation) continuation {
+	return w.sequence(w.object(oid, ""), next)
+}
+
 func (w *berWriter) class(class int, next continuation) continuation {
 	return func(_ int, constructed bool, tag int, length int) (err error) {
 		return next(class, constructed, tag, length)
@@ -107,6 +108,17 @@ func (w *berWriter) explicit(tag int, length int, next continuation) continuatio
 	}
 }
 
+func (w *berWriter) optional(tag int, next continuation) continuation {
+	return w.explicit(tag, -1, next)
+}
+
+func (w *berWriter) raw(data []byte) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		_, err = w.Write(data)
+		return
+	}
+}
+
 func (w *berWriter) sequence(seq ...continuation) continuation {
 	return w.constructed(
 		w.explicit(16, -1,
@@ -122,23 +134,10 @@ func (w *berWriter) sequence(seq ...continuation) continuation {
 	)
 }
 
-func (w *berWriter) binary(r io.Reader) continuation {
-	size := -1
-	switch t := r.(type) {
-	case *os.File:
-		stat, err := t.Stat()
-		if err != nil {
-			return err
-		}
-		size = int(stat.Size())
-	case Buffer:
-		size = t.Len()
-	}
-	return w.explicit(16, size,
-		func(class int, constructed bool, tag int, length int) (err error) {
-			if size == -1 {
-				return errors.New("specified reader does not provide size")
-			}
-		},
-	)
+func (w *berWriter) octets(next continuation) continuation {
+	return w.constructed(w.explicit(4, -1, next))
+}
+
+func (w *berWriter) writeBER(cont continuation) error {
+	return cont(0, false, 0, 0)
 }
