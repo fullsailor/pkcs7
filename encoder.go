@@ -9,7 +9,7 @@ import (
 // NewEncoder creates stream PKCS signer
 func NewEncoder(w io.Writer) *SignedData {
 	return &SignedData{
-		w: w,
+		w: &berWriter{w},
 	}
 }
 
@@ -47,5 +47,6 @@ func (sd *SignedData) Sign(r io.Reader) (err error) {
 	default:
 		return errors.New("provided reader has no way to specify size")
 	}
-
+	sd.sd.Certificates = marshalCertificates(sd.certs)
+	return nil
 }
