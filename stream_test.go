@@ -77,21 +77,21 @@ func TestEncoder_SignTo(t *testing.T) {
 	}
 }
 
-func BenchmarkSignTo(b *testing.B) {
+var content = bytes.NewReader(make([]byte, 128*1024*1024))
+
+func BenchmarkSignFrom(b *testing.B) {
 	cert, err := createTestCertificate()
 	if err != nil {
 		b.Fatal(err)
 	}
-	content := make([]byte, 128*1024*1024)
-	r := bytes.NewReader(content)
 	for i := 0; i < b.N; i++ {
 		toBeSigned := NewEncoder(ioutil.Discard)
 		if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
 			b.Fatalf("Cannot add signer: %s", err)
 		}
-		if err = toBeSigned.SignFrom(r, len(content)); err != nil {
+		if err = toBeSigned.SignFrom(content, int(content.Size())); err != nil {
 			b.Fatalf("Cannot finish signing data: %s", err)
 		}
-		r.Seek(0, 0)
+		content.Seek(0, 0)
 	}
 }
