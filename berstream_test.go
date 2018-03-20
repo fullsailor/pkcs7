@@ -44,7 +44,10 @@ func TestEncoder_SignTo(t *testing.T) {
 	}
 	ioutil.WriteFile("test.der", buf.Bytes(), 0664)
 	p7 := NewDecoder(buf)
-	if err := p7.VerifyTo(ioutil.Discard); err != nil {
+	dest := new(bytes.Buffer)
+	if err := p7.VerifyTo(dest); err != nil {
+		t.Logf("%+v", p7)
+		t.Logf("%q", string(dest.Bytes()))
 		t.Errorf("%v", err)
 	}
 }

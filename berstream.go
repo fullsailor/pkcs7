@@ -90,7 +90,7 @@ var errConditionNotMet = errors.New("optional condition not met")
 func (br *berReader) optional(expected int, next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if expected == tag && length != 0 {
-			return errors.WithMessage(br.readBER(next), fmt.Sprintf("optional[%d]", tag))
+			return errors.WithMessage(br.sequence(next)(class, constructed, tag, length), fmt.Sprintf("optional[%d]", tag))
 		}
 		return errConditionNotMet
 	}
@@ -147,14 +147,14 @@ func (br *berReader) readTillEnd(dest io.Writer) (err error) {
 
 func (br *berReader) raw(expected int, optional bool, process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
-		if expected > 0 && tag != expected {
+		if expected >= 0 && tag != expected {
 			if !optional {
 				return errors.Wrap(perr("expected tag %d got %d", expected, tag), "raw")
 			}
 			return errConditionNotMet
 		}
 		var buf bytes.Buffer
-		if err = encodeMeta(&buf, class, constructed, tag, length); err != nil {
+		if _, err = buf.Write(encodeMeta(class, constructed, tag, length)); err != nil {
 			return errors.Wrap(err, "raw")
 		}
 		if length < 0 {

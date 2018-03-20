@@ -2,7 +2,6 @@ package pkcs7
 
 import (
 	"encoding/asn1"
-	"fmt"
 	"io"
 
 	"github.com/pkg/errors"
@@ -41,34 +40,31 @@ func appendBase128Int(dst []byte, n int64) []byte {
 	return dst
 }
 
-func encodeMeta(w io.Writer, class int, constructed bool, tag int, length int) (err error) {
-	var dst []byte
+func encodeMeta(class int, constructed bool, tag int, length int) (res []byte) {
 	b := uint8(class) << 6
 	if constructed {
 		b |= 0x20
 	}
 	if tag >= 31 {
 		b |= 0x1f
-		dst = append(dst, b)
-		dst = appendBase128Int(dst, int64(tag))
+		res = append(res, b)
+		res = appendBase128Int(res, int64(tag))
 	} else {
 		b |= uint8(tag)
-		dst = append(dst, b)
+		res = append(res, b)
 	}
 	switch {
 	case length >= 128:
 		l := lengthLength(length)
-		dst = append(dst, 0x80|byte(l))
+		res = append(res, 0x80|byte(l))
 		for n := l; n > 0; n-- {
-			dst = append(dst, byte(length>>uint((n-1)*8)))
+			res = append(res, byte(length>>uint((n-1)*8)))
 		}
 	case length < 0:
-		dst = append(dst, 0x80)
+		res = append(res, 0x80)
 	default:
-		dst = append(dst, byte(length))
+		res = append(res, byte(length))
 	}
-	_, err = w.Write(dst)
-	err = errors.Wrap(err, "writing meta")
 	return
 }
 
@@ -102,15 +98,14 @@ func (w *berWriter) constructed(next continuation) continuation {
 
 func (w *berWriter) explicit(tag int, length int, next continuation) continuation {
 	return func(class int, constructed bool, _ int, _ int) (err error) {
-		if err = encodeMeta(w, class, constructed, tag, length); err != nil {
+		if _, err = w.Write(encodeMeta(class, constructed, tag, length)); err != nil {
 			return
 		}
-		if err = next(0, false, 0, 0); err != nil {
+		if err = w.writeBER(next); err != nil {
 			return
 		}
 		if length < 0 {
 			_, err = w.Write([]byte{0, 0})
-			return
 		}
 		return
 	}
@@ -121,11 +116,7 @@ func (w *berWriter) optional(tag int, next continuation) continuation {
 }
 
 func (w *berWriter) raw(tag int, data []byte) continuation {
-	return func(class int, constructed bool, _ int, _ int) (err error) {
-		fmt.Println("***", tag, data[:10], len(data))
-		if err = encodeMeta(w, class, constructed, tag, len(data)); err != nil {
-			return
-		}
+	return func(_ int, _ bool, _ int, _ int) (err error) {
 		_, err = w.Write(data)
 		err = errors.Wrap(err, "writing raw bytes")
 		return
@@ -137,7 +128,7 @@ func (w *berWriter) sequence(seq ...continuation) continuation {
 		w.explicit(16, -1,
 			func(class int, constructed bool, tag int, length int) (err error) {
 				for _, cont := range seq {
-					if err = cont(class, constructed, tag, length); err != nil {
+					if err = w.writeBER(cont); err != nil {
 						break
 					}
 				}

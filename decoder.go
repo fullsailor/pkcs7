@@ -135,7 +135,7 @@ func (p7 *PKCS7) VerifyTo(dest io.Writer) error {
 					}),
 					br.raw(1, true, func(data []byte) (err error) {
 						_, err = asn1.UnmarshalWithParams(data, &p7.CRLs, "optional,tag:1")
-						return
+						return errors.Wrap(err, "unmarshaling CRLs")
 					}),
 					br.object(&p7.Signers, "set"),
 				),
