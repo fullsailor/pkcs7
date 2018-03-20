@@ -231,14 +231,14 @@ func (p7 *PKCS7) Verify() (err error) {
 
 func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	signedData := p7.Content
+	hash, err := getHashForOID(signer.DigestAlgorithm.Algorithm)
+	if err != nil {
+		return err
+	}
 	if len(signer.AuthenticatedAttributes) > 0 {
 		// TODO(fullsailor): First check the content type match
 		var digest []byte
 		err := unmarshalAttribute(signer.AuthenticatedAttributes, oidAttributeMessageDigest, &digest)
-		if err != nil {
-			return err
-		}
-		hash, err := getHashForOID(signer.DigestAlgorithm.Algorithm)
 		if err != nil {
 			return err
 		}
@@ -263,11 +263,18 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 		return errors.New("pkcs7: No certificate for signer")
 	}
 
-	algo, err := getSignAlgorithm(signer.DigestAlgorithm.Algorithm)
-	if err != nil {
-		return err
+	algo := getSignatureAlgorithmFromAI(signer.DigestEncryptionAlgorithm)
+	if algo == x509.UnknownSignatureAlgorithm {
+		// I'm not sure what the spec here is, and the openssl sources were not
+		// helpful. But, this is what App Store receipts appear to do.
+		// The DigestEncryptionAlgorithm is just "rsaEncryption (PKCS #1)"
+		// But we're expecting a digest + encryption algorithm. So... we're going
+		// to determine an algorithm based on the DigestAlgorithm and this
+		// encryption algorithm.
+		if signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidRSA) {
+			algo = getRSASignatureAlgorithmForDigestAlgorithm(hash)
+		}
 	}
-	//     fmt.Println(algo, signer.DigestAlgorithm.Algorithm)
 	return cert.CheckSignature(algo, signedData, signer.EncryptedDigest)
 }
 
@@ -286,11 +293,8 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 }
 
 var (
-	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
-	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
-	oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
-	oidRSA    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidSHA1 = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidRSA  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
@@ -328,6 +332,15 @@ func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error
 		return x509.SHA512WithRSA, nil
 	}
 	return x509.UnknownSignatureAlgorithm, ErrUnsupportedAlgorithm
+}
+
+func getRSASignatureAlgorithmForDigestAlgorithm(hash crypto.Hash) x509.SignatureAlgorithm {
+	for _, details := range signatureAlgorithmDetails {
+		if details.pubKeyAlgo == x509.RSA && details.hash == hash {
+			return details.algo
+		}
+	}
+	return x509.UnknownSignatureAlgorithm
 }
 
 // GetOnlySigner returns an x509.Certificate for the first signer of the signed
