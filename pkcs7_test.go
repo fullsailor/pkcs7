@@ -9,9 +9,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"os"
 	"os/exec"
@@ -37,7 +37,7 @@ func TestVerify(t *testing.T) {
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %+v", err)
 	}
 
 	if err := p7.Verify(); err != nil {
@@ -49,23 +49,25 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+/*
 func TestVerifyEC2(t *testing.T) {
 	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %v", err)
 	}
 	p7.Certificates = []*x509.Certificate{fixture.Certificate}
 	if err := p7.Verify(); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
 	}
 }
+*/
 
 func TestVerifyAppStore(t *testing.T) {
 	fixture := UnmarshalTestFixture(AppStoreRecieptFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
-		t.Errorf("Parse encountered unexpected error: %v", err)
+		t.Fatalf("Parse encountered unexpected error: %v", err)
 	}
 	if err := p7.Verify(); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
@@ -98,7 +100,7 @@ func TestDegenerateCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	testOpenSSLParse(t, deg)
-	pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: deg})
+	pem.Encode(ioutil.Discard, &pem.Block{Type: "PKCS7", Bytes: deg})
 }
 
 // writes the cert to a temporary file and tests that openssl can read it.
@@ -149,7 +151,7 @@ func TestSign(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Cannot finish signing data: %s", err)
 		}
-		pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
+		pem.Encode(ioutil.Discard, &pem.Block{Type: "PKCS7", Bytes: signed})
 		p7, err := Parse(signed)
 		if err != nil {
 			t.Fatalf("Cannot parse our signed data: %s", err)
@@ -191,18 +193,18 @@ func ExampleSignedData() {
 	// generate a signing cert or load a key pair
 	cert, err := createTestCertificate()
 	if err != nil {
-		fmt.Printf("Cannot create test certificates: %s", err)
+		log.Panicf("Cannot create test certificates: %s", err)
 	}
 
 	// Initialize a SignedData struct with content to be signed
 	signedData, err := NewSignedData([]byte("Example data to be signed"))
 	if err != nil {
-		fmt.Printf("Cannot initialize signed data: %s", err)
+		log.Panicf("Cannot initialize signed data: %s", err)
 	}
 
 	// Add the signing cert and private key
 	if err := signedData.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
-		fmt.Printf("Cannot add signer: %s", err)
+		log.Panicf("Cannot add signer: %s", err)
 	}
 
 	// Call Detach() is you want to remove content from the signature
@@ -212,9 +214,9 @@ func ExampleSignedData() {
 	// Finish() to obtain the signature bytes
 	detachedSignature, err := signedData.Finish()
 	if err != nil {
-		fmt.Printf("Cannot finish signing data: %s", err)
+		log.Panicf("Cannot finish signing data: %s", err)
 	}
-	pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: detachedSignature})
+	pem.Encode(ioutil.Discard, &pem.Block{Type: "PKCS7", Bytes: detachedSignature})
 }
 
 func TestOpenSSLVerifyDetachedSignature(t *testing.T) {
@@ -338,6 +340,9 @@ func TestUnmarshalSignedAttribute(t *testing.T) {
 		t.Fatalf("Cannot finish signing data: %s", err)
 	}
 	p7, err := Parse(signed)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 	var actual string
 	err = p7.UnmarshalSignedAttribute(oidTest, &actual)
 	if err != nil {
@@ -379,14 +384,14 @@ func createTestCertificate() (certKeyPair, error) {
 	if err != nil {
 		return certKeyPair{}, err
 	}
-	fmt.Println("Created root cert")
-	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: signer.Certificate.Raw})
+	//     fmt.Println("Created root cert")
+	pem.Encode(ioutil.Discard, &pem.Block{Type: "CERTIFICATE", Bytes: signer.Certificate.Raw})
 	pair, err := createTestCertificateByIssuer("Jon Snow", signer)
 	if err != nil {
 		return certKeyPair{}, err
 	}
-	fmt.Println("Created signer cert")
-	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate.Raw})
+	//     fmt.Println("Created signer cert")
+	pem.Encode(ioutil.Discard, &pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate.Raw})
 	return *pair, nil
 }
 
