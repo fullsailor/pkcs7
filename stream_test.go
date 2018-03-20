@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"io/ioutil"
+	"reflect"
 	"testing"
 )
 
@@ -27,6 +28,15 @@ func TestDecoder_VerifyTo(t *testing.T) {
 		}
 		if !bytes.Equal(p7a.Content, buf.Bytes()) {
 			t.Error("content does not match")
+		}
+		if !reflect.DeepEqual(p7a.Signers, p7.Signers) {
+			t.Error("signer info parsed incorrectly")
+		}
+		if !reflect.DeepEqual(p7a.Certificates, p7.Certificates) {
+			t.Error("certificates parsed incorrectly")
+		}
+		if !reflect.DeepEqual(p7a.CRLs, p7.CRLs) {
+			t.Error("CRLs parsed incorrectly")
 		}
 	}
 }
