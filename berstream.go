@@ -130,25 +130,23 @@ func (br *berReader) endOctets() continuation {
 	})
 }
 
+func (br *berReader) readTillEnd(dest io.Writer) (err error) {
+	var stop bool
+	for err != nil && !stop {
+		err = br.readBER(br.raw(-1, true, func(data []byte) (err error) {
+			if bytes.Equal(data, []byte{0, 0}) {
+				stop = true
+				return nil
+			}
+			_, err = dest.Write(data)
+			return errors.Wrap(err, "writing to inner buffer")
+		}))
+	}
+	return
+}
+
 func (br *berReader) raw(expected int, optional bool, process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
-		if length < 0 {
-			if !constructed {
-				return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
-			}
-			var buf bytes.Buffer
-			for {
-				if err = br.readBER(br.raw(-1, true, func(data []byte) error {
-					if bytes.Equal(data, []byte{0, 0}) {
-						break
-					}
-					buf.Write(data)
-					return nil
-				})); err != nil {
-					return
-				}
-			}
-		}
 		if expected > 0 && tag != expected {
 			if !optional {
 				return errors.Wrap(perr("expected tag %d got %d", expected, tag), "raw")
@@ -159,7 +157,13 @@ func (br *berReader) raw(expected int, optional bool, process func([]byte) error
 		if err = encodeMeta(&buf, class, constructed, tag, length); err != nil {
 			return errors.Wrap(err, "raw")
 		}
-		if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
+		if length < 0 {
+			if !constructed {
+				return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
+			} else if err = br.readTillEnd(&buf); err != nil {
+				return errors.WithMessage(err, "reading indefinite tag")
+			}
+		} else if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
 			return errors.Wrap(err, "raw")
 		}
 		return errors.WithMessage(process(buf.Bytes()), "raw")
