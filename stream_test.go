@@ -2,19 +2,32 @@ package pkcs7
 
 import (
 	"bytes"
+	"crypto/rand"
 	"io/ioutil"
 	"testing"
 )
 
 func TestDecoder_VerifyTo(t *testing.T) {
-	for i, fixture := range []string{SignedTestFixture, AppStoreRecieptFixture} {
+	for _, fixture := range []string{SignedTestFixture, AppStoreRecieptFixture} {
+		buf := new(bytes.Buffer)
 		fixture := UnmarshalTestFixture(fixture)
 		p7 := NewDecoder(bytes.NewReader(fixture.Input))
-		if err := p7.VerifyTo(ioutil.Discard); err != nil {
+		if err := p7.VerifyTo(buf); err != nil {
 			t.Errorf("%+v", err)
 			continue
 		}
-		t.Log(i, "ok")
+		p7a, err := Parse(fixture.Input)
+		if err != nil {
+			t.Errorf("%+v", err)
+			continue
+		}
+		if err = p7a.Verify(); err != nil {
+			t.Errorf("%+v", err)
+			continue
+		}
+		if !bytes.Equal(p7a.Content, buf.Bytes()) {
+			t.Error("content does not match")
+		}
 	}
 }
 
@@ -33,7 +46,10 @@ func TestEncoder_SignTo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := []byte("Hello World")
+	content := make([]byte, 10000)
+	if _, err = rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
 	buf := new(bytes.Buffer)
 	toBeSigned := NewEncoder(buf)
 	if err := toBeSigned.AddSigner(cert.Certificate, cert.PrivateKey, SignerInfoConfig{}); err != nil {
@@ -42,13 +58,22 @@ func TestEncoder_SignTo(t *testing.T) {
 	if err = toBeSigned.SignFrom(bytes.NewReader(content), len(content)); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	ioutil.WriteFile("test.der", buf.Bytes(), 0664)
+	p7a, err := Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("%+v", err)
+	} else if err = p7a.Verify(); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	if !bytes.Equal(content, p7a.Content) {
+		t.Fatal("content does not match")
+	}
 	p7 := NewDecoder(buf)
 	dest := new(bytes.Buffer)
 	if err := p7.VerifyTo(dest); err != nil {
-		t.Logf("%+v", p7)
-		t.Logf("%q", string(dest.Bytes()))
 		t.Errorf("%v", err)
+	}
+	if !bytes.Equal(content, dest.Bytes()) {
+		t.Fatal("content does not match")
 	}
 }
 
