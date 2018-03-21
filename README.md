@@ -1,6 +1,6 @@
 # pkcs7
 
-This is a fork of an excellent [pkcs7](https://github.com/fullsaylor/pkcs7) package. Copyright (c) 2015 Andrew Smith.
+This is a fork of an excellent [pkcs7](https://github.com/fullsailor/pkcs7) package. Copyright (c) 2015 Andrew Smith.
 
 Notable additions to the original library are stream verifying and signing
 functions. To verify signed message from reader `src` while writing contents to
