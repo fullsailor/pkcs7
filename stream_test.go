@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"crypto/rand"
 	"io/ioutil"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -68,7 +72,8 @@ func TestEncoder_SignTo(t *testing.T) {
 	if err = toBeSigned.SignFrom(bytes.NewReader(content), len(content)); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	p7a, err := Parse(buf.Bytes())
+	signedData := buf.Bytes()
+	p7a, err := Parse(signedData)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	} else if err = p7a.Verify(); err != nil {
@@ -84,6 +89,20 @@ func TestEncoder_SignTo(t *testing.T) {
 	}
 	if !bytes.Equal(content, dest.Bytes()) {
 		t.Fatal("content does not match")
+	}
+	tmp, err := ioutil.TempFile("", "openssl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp.Name())
+	if err = ioutil.WriteFile(tmp.Name(), signedData, 0664); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("openssl", "cms", "-inform", "der", "-in", tmp.Name(), "-out", "/dev/null", "-verify", "-noverify")
+	stdout, err := cmd.Output()
+	if err != nil {
+		exitError, _ := err.(*exec.ExitError)
+		t.Error("openssl:", err, string(stdout), string(exitError.Stderr))
 	}
 }
 
@@ -103,5 +122,35 @@ func BenchmarkSignFrom(b *testing.B) {
 			b.Fatalf("Cannot finish signing data: %s", err)
 		}
 		content.Seek(0, 0)
+	}
+}
+
+func TestVerifyData(t *testing.T) {
+	_, err := os.Stat("testdata")
+	if err != nil {
+		t.Skip("checking testdata: ", err)
+	}
+	if err = filepath.Walk("testdata", func(path string, info os.FileInfo, err error) error {
+		if !strings.HasSuffix(path, ".cms") || info.IsDir() || err != nil {
+			return err
+		}
+		fp, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer fp.Close()
+		p7 := NewDecoder(fp)
+		if err = p7.VerifyTo(ioutil.Discard); err != nil {
+			return err
+		}
+		signer := p7.GetOnlySigner()
+		if signer == nil || len(signer.Raw) == 0 {
+			t.Errorf("no signer for %s", path)
+			return nil
+		}
+		t.Logf("verify success on %s", filepath.Base(path))
+		return nil
+	}); err != nil {
+		t.Errorf("%+v", err)
 	}
 }
