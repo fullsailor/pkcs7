@@ -228,6 +228,20 @@ func (sd *SignedData) Finish() ([]byte, error) {
 	return asn1.Marshal(outer)
 }
 
+// RemoveAuthenticatedAttributes removes authenticated attributes from signedData
+// similar to OpenSSL's PKCS7_NOATTR or -noattr flags
+func (sd *SignedData) RemoveAuthenticatedAttributes() error {
+	for i, _ := range sd.sd.SignerInfos {
+		blankAttrs := &attributes{}
+		finalBlankAttrs, err := blankAttrs.ForMarshalling()
+		if err != nil {
+			return err
+		}
+		sd.sd.SignerInfos[i].AuthenticatedAttributes = finalBlankAttrs
+	}
+	return nil
+}
+
 // verifyPartialChain checks that a given cert is issued by the first parent in the list,
 // then continue down the path. It doesn't require the last parent to be a root CA,
 // or to be trusted in any truststore. It simply verifies that the chain provided, albeit
