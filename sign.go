@@ -93,7 +93,9 @@ type issuerAndSerial struct {
 	SerialNumber *big.Int
 }
 
-// SetDigestAlgorithm sets the digest algorithm to be used in the signing process
+// SetDigestAlgorithm sets the digest algorithm to be used in the signing process.
+//
+// This should be called before adding signers
 func (sd *SignedData) SetDigestAlgorithm(d asn1.ObjectIdentifier) {
 	sd.digestOid = d
 }
