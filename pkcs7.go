@@ -27,7 +27,7 @@ type PKCS7 struct {
 	Content      []byte
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList
-	Signers      []signerInfo
+	Signers      []SignerInfo
 	raw          interface{}
 }
 
@@ -61,7 +61,7 @@ type signedData struct {
 	ContentInfo                contentInfo
 	Certificates               rawCertificates        `asn1:"optional,tag:0"`
 	CRLs                       []pkix.CertificateList `asn1:"optional,tag:1"`
-	SignerInfos                []signerInfo           `asn1:"set"`
+	SignerInfos                []SignerInfo           `asn1:"set"`
 }
 
 type rawCertificates struct {
@@ -108,7 +108,7 @@ func (err *MessageDigestMismatchError) Error() string {
 	return fmt.Sprintf("pkcs7: Message digest mismatch\n\tExpected: %X\n\tActual  : %X", err.ExpectedDigest, err.ActualDigest)
 }
 
-type signerInfo struct {
+type SignerInfo struct {
 	Version                   int `asn1:"default:1"`
 	IssuerAndSerialNumber     issuerAndSerial
 	DigestAlgorithm           pkix.AlgorithmIdentifier
@@ -220,7 +220,7 @@ func (p7 *PKCS7) Verify() (err error) {
 	return nil
 }
 
-func verifySignature(p7 *PKCS7, signer signerInfo) error {
+func verifySignature(p7 *PKCS7, signer SignerInfo) error {
 	signedData := p7.Content
 	hash, err := getHashForOID(signer.DigestAlgorithm.Algorithm)
 	if err != nil {
@@ -645,12 +645,12 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 		return err
 	}
 
-	ias, err := cert2issuerAndSerial(cert)
+	ias, err := Cert2issuerAndSerial(cert)
 	if err != nil {
 		return err
 	}
 
-	signer := signerInfo{
+	signer := SignerInfo{
 		AuthenticatedAttributes:   finalAttrs,
 		DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigestAlgorithmSHA1},
 		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidSignatureSHA1WithRSA},
@@ -661,6 +661,36 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	// create signature of signed attributes
 	sd.certs = append(sd.certs, cert)
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
+	return nil
+}
+
+func (sd *SignedData) HashAttributes(hash crypto.Hash, config SignerInfoConfig) ([]attribute, []byte, error) {
+	attrs := &attributes{}
+	attrs.Add(oidAttributeContentType, sd.sd.ContentInfo.ContentType)
+	attrs.Add(oidAttributeMessageDigest, sd.messageDigest)
+	attrs.Add(oidAttributeSigningTime, time.Now())
+	for _, attr := range config.ExtraSignedAttributes {
+		attrs.Add(attr.Type, attr.Value)
+	}
+	finalAttrs, err := attrs.ForMarshaling()
+	if err != nil {
+		return nil, nil, err
+	}
+	attrBytes, err := marshalAttributes(finalAttrs)
+	if err != nil {
+		return nil, nil, err
+	}
+	h := hash.New()
+	h.Write(attrBytes)
+	hashed := h.Sum(nil)
+	return finalAttrs, hashed, nil
+}
+
+// AddSignerInfo adds SignerInfo and adds certificate to payload
+func (sd *SignedData) AddSignerInfo(cert *x509.Certificate, signerInfo SignerInfo) error {
+	// create signature of signed attributes
+	sd.certs = append(sd.certs, cert)
+	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signerInfo)
 	return nil
 }
 
@@ -689,7 +719,7 @@ func (sd *SignedData) Finish() ([]byte, error) {
 	return asn1.Marshal(outer)
 }
 
-func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
+func Cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 	var ias issuerAndSerial
 	// The issuer RDNSequence has to match exactly the sequence in the certificate
 	// We cannot use cert.Issuer.ToRDNSequence() here since it mangles the sequence
@@ -912,7 +942,7 @@ func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		ias, err := cert2issuerAndSerial(recipient)
+		ias, err := Cert2issuerAndSerial(recipient)
 		if err != nil {
 			return nil, err
 		}
