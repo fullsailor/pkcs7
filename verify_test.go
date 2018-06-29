@@ -15,6 +15,7 @@ import (
 )
 
 func TestVerify(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -81,6 +82,7 @@ BCvcu85DqJeJyQv44Oe1qsXEX9BfcQIOVaoep35RPlKi9g==
 -----END PRIVATE KEY-----`
 
 func TestVerifyEC2(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -132,6 +134,7 @@ vSeDCOUMYQR7R9LINYwouHIziqQYMAkGByqGSM44BAMDLwAwLAIUWXBlk40xTwSw
 -----END CERTIFICATE-----`
 
 func TestVerifyAppStore(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(AppStoreReceiptFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -253,6 +256,7 @@ QfjfFBG9JG2mUmYQP1KQ3SypGHzDW8vngvsGu//tNU0NFfOqQu4bYU4VpQl0nPtD
 -----END PKCS7-----`
 
 func TestVerifyFirefoxAddon(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(FirefoxAddonFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -432,6 +436,7 @@ wNuvFqc=
 // this uses a chain of root, intermediate and signer cert, where the
 // intermediate is added to the certs but the root isn't.
 func TestSignWithOpenSSLAndVerify(t *testing.T) {
+	t.Parallel()
 	content := []byte(`
 A ship in port is safe,
 but that's not what ships are built for.

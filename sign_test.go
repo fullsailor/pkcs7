@@ -14,6 +14,7 @@ import (
 )
 
 func TestSign(t *testing.T) {
+	t.Parallel()
 	content := []byte("Hello World")
 	sigalgs := []x509.SignatureAlgorithm{
 		x509.SHA1WithRSA,
@@ -89,6 +90,7 @@ func TestSign(t *testing.T) {
 }
 
 func TestSignAndVerifyWithOpenSSL(t *testing.T) {
+	t.Parallel()
 	content := []byte("Hello World")
 	// write the content to a temp file
 	tmpContentFile, err := ioutil.TempFile("", "TestSignAndVerifyWithOpenSSL_content")
@@ -213,6 +215,7 @@ func ExampleSignedData() {
 }
 
 func TestUnmarshalSignedAttribute(t *testing.T) {
+	t.Parallel()
 	cert, err := createTestCertificate(x509.SHA512WithRSA)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +251,7 @@ func TestUnmarshalSignedAttribute(t *testing.T) {
 }
 
 func TestDegenerateCertificate(t *testing.T) {
+	t.Parallel()
 	cert, err := createTestCertificate(x509.SHA1WithRSA)
 	if err != nil {
 		t.Fatal(err)

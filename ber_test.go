@@ -8,6 +8,7 @@ import (
 )
 
 func TestBer2Der(t *testing.T) {
+	t.Parallel()
 	// indefinite length fixture
 	ber := []byte{0x30, 0x80, 0x02, 0x01, 0x01, 0x00, 0x00}
 	expected := []byte{0x30, 0x03, 0x02, 0x01, 0x01}
@@ -38,6 +39,7 @@ func TestBer2Der(t *testing.T) {
 }
 
 func TestBer2Der_Negatives(t *testing.T) {
+	t.Parallel()
 	fixtures := []struct {
 		Input         []byte
 		ErrorContains string
