@@ -9,7 +9,9 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/big"
+	"net/http"
 	"time"
 )
 
@@ -196,6 +198,62 @@ func (si *signerInfo) SetUnauthenticatedAttributes(extra_unsigned_attrs []Attrib
 
 	si.UnauthenticatedAttributes = finalUnsignedAttrs
 
+	return nil
+}
+
+// AddTimestampToSigner requests a RFC3161 timestamp from an upstream tsa for a
+// given signer and inserts it into the unauthenticated attributes of that signer
+func (sd *SignedData) AddTimestampToSigner(signerID int, tsa string) (err error) {
+	var opts *TSRequestOptions
+	opts.Hash, err = getHashForOID(sd.digestOid)
+	if err != nil {
+		return err
+	}
+	opts.Certificates = true
+	if len(sd.sd.SignerInfos) < (signerID + 1) {
+		return fmt.Errorf("no signer information found for ID %d", signerID)
+	}
+	tsreq, err := CreateTSRequest(sd.sd.SignerInfos[signerID].EncryptedDigest, opts)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", tsa, bytes.NewReader(tsreq))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/timestamp-query")
+	cli := &http.Client{}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("tsa returned empty response")
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("tsa returned \"%d %s\" instead of 200 OK", resp.StatusCode, resp.Status)
+	}
+	// parse it to make sure we got a valid response
+	_, err = ParseTSResponse(body)
+	if err != nil {
+		return err
+	}
+
+	// add the timestamp to the unauthenticated attributes
+	attrs := &attributes{}
+	for _, attr := range sd.sd.SignerInfos[signerID].UnauthenticatedAttributes {
+		attrs.Add(attr.Type, attr.Value)
+	}
+	attrs.Add(OIDAttributeTimeStampToken, body)
+	sd.sd.SignerInfos[signerID].UnauthenticatedAttributes, err = attrs.ForMarshalling()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
