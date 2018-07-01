@@ -204,7 +204,7 @@ func (si *signerInfo) SetUnauthenticatedAttributes(extra_unsigned_attrs []Attrib
 // AddTimestampToSigner requests a RFC3161 timestamp from an upstream tsa for a
 // given signer and inserts it into the unauthenticated attributes of that signer
 func (sd *SignedData) AddTimestampToSigner(signerID int, tsa string) (err error) {
-	var opts *TSRequestOptions
+	opts := new(TSRequestOptions)
 	opts.Hash, err = getHashForOID(sd.digestOid)
 	if err != nil {
 		return err

@@ -278,7 +278,7 @@ func CreateTSRequest(input []byte, opts *TSRequestOptions) ([]byte, error) {
 		HashAlgorithm: opts.hash(),
 		HashedMessage: h.Sum(nil),
 	}
-	if opts.Certificates {
+	if opts != nil && opts.Certificates {
 		req.Certificates = opts.Certificates
 	}
 	return req.Marshal()
