@@ -68,6 +68,42 @@ type TSRequest struct {
 	ExtraExtensions []pkix.Extension
 }
 
+// TSRequestOptions contains options for constructing timestamp requests.
+type TSRequestOptions struct {
+	// Hash contains the hash function that should be used when
+	// constructing the timestamp request. If zero, SHA-256 will be used.
+	Hash crypto.Hash
+
+	// Certificates sets Request.Certificates
+	Certificates bool
+}
+
+func (opts *TSRequestOptions) hash() crypto.Hash {
+	if opts == nil || opts.Hash == 0 {
+		return crypto.SHA256
+	}
+	return opts.Hash
+}
+
+// CreateTSRequest returns a DER-encoded, timestamp request for the status of cert. If
+// opts is nil then sensible defaults are used.
+func CreateTSRequest(input []byte, opts *TSRequestOptions) ([]byte, error) {
+	hashFunc := opts.hash()
+	if !hashFunc.Available() {
+		return nil, x509.ErrUnsupportedAlgorithm
+	}
+	h := opts.hash().New()
+	h.Write(input)
+	req := &TSRequest{
+		HashAlgorithm: opts.hash(),
+		HashedMessage: h.Sum(nil),
+	}
+	if opts != nil && opts.Certificates {
+		req.Certificates = opts.Certificates
+	}
+	return req.Marshal()
+}
+
 // http://www.ietf.org/rfc/rfc3161.txt
 // 2.4.1. Request Format
 type timeStampReq struct {
@@ -85,38 +121,6 @@ type messageImprint struct {
 }
 
 type tsaPolicyID asn1.ObjectIdentifier
-
-// ParseTSRequest parses an timestamp request in DER form.
-func ParseTSRequest(bytes []byte) (*TSRequest, error) {
-	var (
-		err  error
-		rest []byte
-		req  timeStampReq
-	)
-
-	if rest, err = asn1.Unmarshal(bytes, &req); err != nil {
-		return nil, err
-	}
-	if len(rest) > 0 {
-		return nil, fmt.Errorf("trailing data in timestamp request")
-	}
-
-	if len(req.MessageImprint.HashedMessage) == 0 {
-		return nil, fmt.Errorf("timestamp request contains no hashed message")
-	}
-
-	hashFunc, err := getHashForOID(req.MessageImprint.HashAlgorithm.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-
-	return &TSRequest{
-		HashAlgorithm: hashFunc,
-		HashedMessage: req.MessageImprint.HashedMessage,
-		Certificates:  req.CertReq,
-		Extensions:    req.Extensions,
-	}, nil
-}
 
 // Marshal marshals the timestamp request to ASN.1 DER encoded form.
 func (req *TSRequest) Marshal() ([]byte, error) {
@@ -152,6 +156,26 @@ type pkiStatusInfo struct {
 	FailInfo     int    `asn1:"optional"`
 }
 
+// eContent within SignedData is TSTInfo
+type tstInfo struct {
+	Version        int
+	Policy         asn1.RawValue
+	MessageImprint messageImprint
+	SerialNumber   *big.Int
+	Time           time.Time
+	Accuracy       accuracy         `asn1:"optional"`
+	Ordering       bool             `asn1:"optional,default:false"`
+	Nonce          *big.Int         `asn1:"optional"`
+	TSA            asn1.RawValue    `asn1:"tag:0,optional"`
+	Extensions     []pkix.Extension `asn1:"tag:1,optional"`
+}
+
+type accuracy struct {
+	Seconds      int64 `asn1:"optional"`
+	Milliseconds int64 `asn1:"tag:0,optional"`
+	Microseconds int64 `asn1:"tag:1,optional"`
+}
+
 // ParseTSResponse parses an timestamp response in DER form containing a
 // TimeStampToken.
 //
@@ -181,26 +205,6 @@ func ParseTSResponse(bytes []byte) (*Timestamp, error) {
 	}
 
 	return ParseTS(resp.TimeStampToken.FullBytes)
-}
-
-// eContent within SignedData is TSTInfo
-type tstInfo struct {
-	Version        int
-	Policy         asn1.RawValue
-	MessageImprint messageImprint
-	SerialNumber   *big.Int
-	Time           time.Time
-	Accuracy       accuracy         `asn1:"optional"`
-	Ordering       bool             `asn1:"optional,default:false"`
-	Nonce          *big.Int         `asn1:"optional"`
-	TSA            asn1.RawValue    `asn1:"tag:0,optional"`
-	Extensions     []pkix.Extension `asn1:"tag:1,optional"`
-}
-
-type accuracy struct {
-	Seconds      int64 `asn1:"optional"`
-	Milliseconds int64 `asn1:"tag:0,optional"`
-	Microseconds int64 `asn1:"tag:1,optional"`
 }
 
 // ParseTS parses an timestamp in DER form. If the time-stamp contains a
@@ -246,42 +250,6 @@ func ParseTS(bytes []byte) (*Timestamp, error) {
 		return nil, err
 	}
 	return ret, nil
-}
-
-// TSRequestOptions contains options for constructing timestamp requests.
-type TSRequestOptions struct {
-	// Hash contains the hash function that should be used when
-	// constructing the timestamp request. If zero, SHA-256 will be used.
-	Hash crypto.Hash
-
-	// Certificates sets Request.Certificates
-	Certificates bool
-}
-
-func (opts *TSRequestOptions) hash() crypto.Hash {
-	if opts == nil || opts.Hash == 0 {
-		return crypto.SHA256
-	}
-	return opts.Hash
-}
-
-// CreateTSRequest returns a DER-encoded, timestamp request for the status of cert. If
-// opts is nil then sensible defaults are used.
-func CreateTSRequest(input []byte, opts *TSRequestOptions) ([]byte, error) {
-	hashFunc := opts.hash()
-	if !hashFunc.Available() {
-		return nil, x509.ErrUnsupportedAlgorithm
-	}
-	h := opts.hash().New()
-	h.Write(input)
-	req := &TSRequest{
-		HashAlgorithm: opts.hash(),
-		HashedMessage: h.Sum(nil),
-	}
-	if opts != nil && opts.Certificates {
-		req.Certificates = opts.Certificates
-	}
-	return req.Marshal()
 }
 
 // pkiFailureInfo contains the result of an timestamp request. See

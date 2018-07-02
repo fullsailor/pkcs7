@@ -239,17 +239,28 @@ func (sd *SignedData) AddTimestampToSigner(signerID int, tsa string) (err error)
 		return fmt.Errorf("tsa returned \"%d %s\" instead of 200 OK", resp.StatusCode, resp.Status)
 	}
 	// parse it to make sure we got a valid response
-	_, err = ParseTSResponse(body)
+	var tsResp timeStampResp
+	rest, err := asn1.Unmarshal(body, &tsResp)
 	if err != nil {
 		return err
 	}
+	if len(rest) > 0 {
+		return fmt.Errorf("trailing data in timestamp response")
+	}
 
-	// add the timestamp to the unauthenticated attributes
+	if tsResp.Status.Status > 0 {
+		return fmt.Errorf("%s: %s", pkiFailureInfo(tsResp.Status.FailInfo).String(), tsResp.Status.StatusString)
+	}
+
+	if len(tsResp.TimeStampToken.Bytes) == 0 {
+		return fmt.Errorf("no pkcs7 data in timestamp response")
+	}
+	// add the timestamp token to the unauthenticated attributes
 	attrs := &attributes{}
 	for _, attr := range sd.sd.SignerInfos[signerID].UnauthenticatedAttributes {
 		attrs.Add(attr.Type, attr.Value)
 	}
-	attrs.Add(OIDAttributeTimeStampToken, body)
+	attrs.Add(OIDAttributeTimeStampToken, tsResp.TimeStampToken)
 	sd.sd.SignerInfos[signerID].UnauthenticatedAttributes, err = attrs.ForMarshalling()
 	if err != nil {
 		return err

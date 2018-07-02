@@ -3,8 +3,6 @@ package pkcs7
 import (
 	"bytes"
 	"crypto"
-	"crypto/sha256"
-	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -56,38 +54,6 @@ var testCases = []testData{
 		hashedMessage: hashedMessage,
 		hashAlgorithm: crypto.SHA256,
 	},
-}
-
-// Send the timestamp request to our timestamp server and save the response
-//  $ curl --globoff -s -S -H Content-Type:application/timestamp-query -H Host:${HOST} --data-binary @request-sha256.tsq -o ts-output.tsr ${URL}
-
-func TestParseTSRequest(t *testing.T) {
-	t.Parallel()
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.request == nil {
-				return
-			}
-
-			req, err := ParseTSRequest(tc.request)
-			if err != nil {
-				t.Errorf("failed to parse request: %s", err.Error())
-				return
-			}
-
-			if !bytes.Equal(req.HashedMessage, tc.hashedMessage) {
-				t.Errorf("req.HashedMessage: got %x, want %x", req.HashedMessage, tc.hashedMessage)
-			}
-
-			if req.HashAlgorithm != tc.hashAlgorithm {
-				t.Errorf("req.HashAlgorithm: got %v, want %v", req.HashAlgorithm, tc.hashAlgorithm)
-			}
-
-			if req.Certificates != tc.certificates {
-				t.Errorf("req.Certificates: got %v, want %v", req.Certificates, tc.certificates)
-			}
-		})
-	}
 }
 
 func TestParseTSResponse(t *testing.T) {
@@ -155,30 +121,9 @@ func TestParseTS(t *testing.T) {
 	}
 }
 
-func TestMarshalRequest(t *testing.T) {
-	t.Parallel()
-	req, err := ParseTSRequest(reqNoNonce)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reqByes, err := req.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(reqByes, reqNoNonce) {
-		t.Error("Marshalled response bytes are not the same as parsed")
-	}
-}
-
 func TestCreateTSRequest(t *testing.T) {
 	t.Parallel()
 	msg := []byte("Content to by timestamped")
-
-	h := sha256.New()
-	h.Write(msg)
-	hashedMsg := h.Sum(nil)
 
 	req, err := CreateTSRequest(msg, nil)
 	if err != nil {
@@ -188,27 +133,12 @@ func TestCreateTSRequest(t *testing.T) {
 	if len(req) == 0 {
 		t.Error("request contains no bytes")
 	}
-
-	reqCheck, err := ParseTSRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(reqCheck.HashedMessage, hashedMsg) {
-		t.Errorf("reqCheck.HashedMessage: got %x, want %x", reqCheck.HashedMessage, hashedMsg)
-	}
 }
 
 func BenchmarkCreateTSRequest(b *testing.B) {
 	reader := []byte("Content to by time-stamped")
 	for n := 0; n < b.N; n++ {
 		CreateTSRequest(reader, nil)
-	}
-}
-
-func BenchmarkParseTSRequest(b *testing.B) {
-	for n := 0; n < b.N; n++ {
-		ParseTSRequest(reqNonce)
 	}
 }
 
@@ -225,24 +155,6 @@ func ExampleCreateTSRequest() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-// ExampleParseRequest demonstrates how to parse a raw der time-stamping request
-func ExampleParseTSRequest() {
-	// CreateRequest returns the request in der bytes
-	createdTSRequest, err := CreateTSRequest([]byte("Content to by time-stamped"), nil)
-	if err != nil {
-		panic(err)
-	}
-
-	// ParseRequest parses a request in der bytes
-	parsedRequest, err := ParseTSRequest(createdTSRequest)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("%x\n", parsedRequest.HashedMessage)
-	// Output: 62633c3232115454963ce641e5095c48a85dbec913a08332ad38586b910a3b27
 }
 
 // Random data, to create with OpenSSL:
