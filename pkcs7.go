@@ -562,9 +562,13 @@ type SignerInfoConfig struct {
 
 // NewSignedData initializes a SignedData with content
 func NewSignedData(data []byte, opts ...Option) (*SignedData, error) {
+	// Since the digestAlgorithm and hash function here are hardcoded we need to
+	// ensure that they match up with the SignatureAlgorithm used in AddSigner
+	// TODO: Make this more dynamic so we determine the digestAlgorithm and
+	// signatureAlgorithm from the key being used.
 	c := &config{
 		digestAlgorithm: pkix.AlgorithmIdentifier{
-			Algorithm: oidDigestAlgorithmSHA1,
+			Algorithm: oidSHA256,
 		},
 	}
 	for _, opt := range opts {
@@ -578,21 +582,16 @@ func NewSignedData(data []byte, opts ...Option) (*SignedData, error) {
 		ContentType: oidData,
 		Content:     asn1.RawValue{Class: 2, Tag: 0, Bytes: content, IsCompound: true},
 	}
-	digAlg := c.digestAlgorithm
-	hashFunc, err := getHashForOID(digAlg.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-	h := hashFunc.New()
+	h := crypto.SHA256.New()
 	if _, err := h.Write(data); err != nil {
 		return nil, err
 	}
 	sd := signedData{
 		ContentInfo:                ci,
 		Version:                    1,
-		DigestAlgorithmIdentifiers: []pkix.AlgorithmIdentifier{digAlg},
+		DigestAlgorithmIdentifiers: []pkix.AlgorithmIdentifier{c.digestAlgorithm},
 	}
-	return &SignedData{sd: sd, messageDigest: h.Sum(nil), digestAlgorithm: digAlg}, nil
+	return &SignedData{sd: sd, messageDigest: h.Sum(nil), digestAlgorithm: c.digestAlgorithm}, nil
 }
 
 type attributes struct {
@@ -678,7 +677,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	}
 
 	// TODO @groob pass a SignatureAlgorithm
-	hash, sigAlgo, err := x509util.SigningParamsForPublicKey(key.Public(), x509.SHA1WithRSA)
+	hash, digAlgo, sigAlgo, err := x509util.SigningParamsForPublicKey(key.Public(), x509.SHA256WithRSA)
 	signature, err := signAttributes(finalAttrs, pkey, hash)
 	if err != nil {
 		return err
@@ -691,8 +690,8 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
-		DigestAlgorithm:           sigAlgo,
-		DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidEncryptionAlgorithmRSA},
+		DigestAlgorithm:           digAlgo,
+		DigestEncryptionAlgorithm: sigAlgo,
 		IssuerAndSerialNumber:     ias,
 		EncryptedDigest:           signature,
 		Version:                   1,
