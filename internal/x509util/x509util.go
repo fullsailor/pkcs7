@@ -47,7 +47,7 @@ import (
 // crypto.Hash function from a provided oid.
 func SignatureAlgorithmDetailsForOid(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, crypto.Hash, error) {
 	for _, details := range signatureAlgorithmDetails {
-		if details.oid.Equal(oid) {
+		if details.oidDigest.Equal(oid) {
 			return details.algo, details.hash, nil
 		}
 	}
@@ -58,13 +58,14 @@ func SignatureAlgorithmDetailsForOid(oid asn1.ObjectIdentifier) (x509.SignatureA
 // SigningParamsForPublicKey returns the parameters to use for signing.
 // If requestedSigAlgo is not zero then it overrides the default
 // signature algorithm.
-func SigningParamsForPublicKey(pub interface{}, requestedSigAlgo x509.SignatureAlgorithm) (hashFunc crypto.Hash, sigAlgo pkix.AlgorithmIdentifier, err error) {
+func SigningParamsForPublicKey(pub interface{}, requestedSigAlgo x509.SignatureAlgorithm) (hashFunc crypto.Hash, digAlgo pkix.AlgorithmIdentifier, sigAlgo pkix.AlgorithmIdentifier, err error) {
 	var pubType x509.PublicKeyAlgorithm
 
 	switch pub := pub.(type) {
 	case *rsa.PublicKey:
 		pubType = x509.RSA
 		hashFunc = crypto.SHA256
+		digAlgo.Algorithm = oidSHA256
 		sigAlgo.Algorithm = oidSignatureSHA256WithRSA
 		sigAlgo.Parameters = asn1NullRawValue
 
@@ -74,12 +75,15 @@ func SigningParamsForPublicKey(pub interface{}, requestedSigAlgo x509.SignatureA
 		switch pub.Curve {
 		case elliptic.P224(), elliptic.P256():
 			hashFunc = crypto.SHA256
+			digAlgo.Algorithm = oidSHA256
 			sigAlgo.Algorithm = oidSignatureECDSAWithSHA256
 		case elliptic.P384():
 			hashFunc = crypto.SHA384
+			digAlgo.Algorithm = oidSHA384
 			sigAlgo.Algorithm = oidSignatureECDSAWithSHA384
 		case elliptic.P521():
 			hashFunc = crypto.SHA512
+			digAlgo.Algorithm = oidSHA512
 			sigAlgo.Algorithm = oidSignatureECDSAWithSHA512
 		default:
 			err = errors.New("x509: unknown elliptic curve")
@@ -104,7 +108,9 @@ func SigningParamsForPublicKey(pub interface{}, requestedSigAlgo x509.SignatureA
 				err = errors.New("x509: requested SignatureAlgorithm does not match private key type")
 				return
 			}
-			sigAlgo.Algorithm, hashFunc = details.oid, details.hash
+			digAlgo.Algorithm = details.oidDigest
+			sigAlgo.Algorithm = details.oidSignature
+			hashFunc = details.hash
 			if hashFunc == 0 {
 				err = errors.New("x509: cannot sign with hash function requested")
 				return
@@ -139,6 +145,9 @@ var (
 	oidSignatureECDSAWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 3}
 	oidSignatureECDSAWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 4}
 
+	oidMD2    = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 2}
+	oidMD5    = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 5}
+	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
 	oidSHA512 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}
