@@ -250,7 +250,10 @@ func TestOpenSSLVerifyDetachedSignature(t *testing.T) {
 func TestEncrypt(t *testing.T) {
 	modes := []int{
 		EncryptionAlgorithmDESCBC,
+		EncryptionAlgorithmDESEDE3CBC,
 		EncryptionAlgorithmAES128GCM,
+		EncryptionAlgorithmAES128CBC,
+		EncryptionAlgorithmAES256CBC,
 	}
 
 	for _, mode := range modes {
