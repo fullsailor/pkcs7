@@ -885,10 +885,12 @@ func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
 }
 
 func encrypt(content []byte, contentEncryptionAlgorithm int) ([]byte, *encryptedContentInfo, error) {
-	var keySize int
-	var blockSize int
-	var block cipher.Block
-	var alg asn1.ObjectIdentifier
+	var (
+		keySize   int
+		blockSize int
+		block     cipher.Block
+		alg       asn1.ObjectIdentifier
+	)
 
 	switch contentEncryptionAlgorithm {
 	case EncryptionAlgorithmDESCBC:
