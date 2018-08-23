@@ -80,12 +80,15 @@ type aesGCMParameters struct {
 func encryptAESGCM(content []byte, key []byte) ([]byte, *encryptedContentInfo, error) {
 	var keyLen int
 	var algID asn1.ObjectIdentifier
-	if ContentEncryptionAlgorithm == EncryptionAlgorithmAES128GCM {
+	switch ContentEncryptionAlgorithm {
+	case EncryptionAlgorithmAES128GCM:
 		keyLen = 16
 		algID = OIDEncryptionAlgorithmAES128GCM
-	} else {
+	case EncryptionAlgorithmAES256GCM:
 		keyLen = 32
 		algID = OIDEncryptionAlgorithmAES256GCM
+	default:
+		return nil, nil, fmt.Errorf("invalid ContentEncryptionAlgorithm in encryptAESGCM: %d", ContentEncryptionAlgorithm)
 	}
 	if key == nil {
 		// Create AES key
@@ -191,12 +194,15 @@ func encryptDESCBC(content []byte, key []byte) ([]byte, *encryptedContentInfo, e
 func encryptAESCBC(content []byte, key []byte) ([]byte, *encryptedContentInfo, error) {
 	var keyLen int
 	var algID asn1.ObjectIdentifier
-	if ContentEncryptionAlgorithm == EncryptionAlgorithmAES128CBC {
+	switch ContentEncryptionAlgorithm {
+	case EncryptionAlgorithmAES128CBC:
 		keyLen = 16
 		algID = OIDEncryptionAlgorithmAES128CBC
-	} else {
+	case EncryptionAlgorithmAES256CBC:
 		keyLen = 32
 		algID = OIDEncryptionAlgorithmAES256CBC
+	default:
+		return nil, nil, fmt.Errorf("invalid ContentEncryptionAlgorithm in encryptAESCBC: %d", ContentEncryptionAlgorithm)
 	}
 
 	if key == nil {
