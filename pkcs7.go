@@ -329,7 +329,7 @@ func (p7 *PKCS7) GetOnlySigner() *x509.Certificate {
 }
 
 // ErrUnsupportedAlgorithm tells you when our quick dev assumptions have failed
-var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, DES, DES-EDE3, AES-256-CBC and AES-128-GCM supported")
+var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, DES, DES-EDE3, AES-256-CBC, AES-128-CBC and AES-128-GCM supported")
 
 // ErrNotEncryptedContent is returned when attempting to Decrypt data that is not encrypted data
 var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
@@ -363,9 +363,15 @@ func (p7 *PKCS7) EncryptionAlgorithm() (int, error) {
 	}
 	alg := data.EncryptedContentInfo.ContentEncryptionAlgorithm.Algorithm
 	switch {
-	case alg.Equal(oidEncryptionAlgorithmDESCBC), alg.Equal(oidEncryptionAlgorithmDESEDE3CBC):
+	case alg.Equal(oidEncryptionAlgorithmDESCBC):
 		return EncryptionAlgorithmDESCBC, nil
-	case alg.Equal(oidEncryptionAlgorithmAES256CBC), alg.Equal(oidEncryptionAlgorithmAES128GCM), alg.Equal(oidEncryptionAlgorithmAES128CBC):
+	case alg.Equal(oidEncryptionAlgorithmDESEDE3CBC):
+		return EncryptionAlgorithmDESEDE3CBC, nil
+	case alg.Equal(oidEncryptionAlgorithmAES256CBC):
+		return EncryptionAlgorithmAES256CBC, nil
+	case alg.Equal(oidEncryptionAlgorithmAES128CBC):
+		return EncryptionAlgorithmAES128CBC, nil
+	case alg.Equal(oidEncryptionAlgorithmAES128GCM):
 		return EncryptionAlgorithmAES128GCM, nil
 	default:
 		return 0, ErrUnsupportedAlgorithm
@@ -418,9 +424,9 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 		block, err = des.NewCipher(key)
 	case alg.Equal(oidEncryptionAlgorithmDESEDE3CBC):
 		block, err = des.NewTripleDESCipher(key)
-	case alg.Equal(oidEncryptionAlgorithmAES256CBC):
-		fallthrough
-	case alg.Equal(oidEncryptionAlgorithmAES128GCM), alg.Equal(oidEncryptionAlgorithmAES128CBC):
+	case alg.Equal(oidEncryptionAlgorithmAES128GCM),
+		alg.Equal(oidEncryptionAlgorithmAES128CBC),
+		alg.Equal(oidEncryptionAlgorithmAES256CBC):
 		block, err = aes.NewCipher(key)
 	}
 
@@ -802,7 +808,10 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 
 const (
 	EncryptionAlgorithmDESCBC = iota
+	EncryptionAlgorithmDESEDE3CBC
 	EncryptionAlgorithmAES128GCM
+	EncryptionAlgorithmAES128CBC
+	EncryptionAlgorithmAES256CBC
 )
 
 // ContentEncryptionAlgorithm determines the algorithm used to encrypt the
@@ -812,7 +821,7 @@ var ContentEncryptionAlgorithm = EncryptionAlgorithmDESCBC
 
 // ErrUnsupportedEncryptionAlgorithm is returned when attempting to encrypt
 // content with an unsupported algorithm.
-var ErrUnsupportedEncryptionAlgorithm = errors.New("pkcs7: cannot encrypt content: only DES-CBC and AES-128-GCM supported")
+var ErrUnsupportedEncryptionAlgorithm = errors.New("pkcs7: cannot encrypt content: only DES, DES-EDE3, AES-256-CBC, AES-128-CBC and AES-128-GCM supported")
 
 const nonceSize = 12
 
@@ -875,10 +884,40 @@ func encryptAES128GCM(content []byte) ([]byte, *encryptedContentInfo, error) {
 	return key, &eci, nil
 }
 
-func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
-	// Create DES key & CBC IV
-	key := make([]byte, 8)
-	iv := make([]byte, des.BlockSize)
+func encrypt(content []byte, contentEncryptionAlgorithm int) ([]byte, *encryptedContentInfo, error) {
+	var (
+		keySize   int
+		blockSize int
+		block     cipher.Block
+		alg       asn1.ObjectIdentifier
+	)
+
+	switch contentEncryptionAlgorithm {
+	case EncryptionAlgorithmDESCBC:
+		keySize = 8
+		blockSize = des.BlockSize
+		alg = oidEncryptionAlgorithmDESCBC
+	case EncryptionAlgorithmDESEDE3CBC:
+		keySize = 24
+		blockSize = des.BlockSize
+		alg = oidEncryptionAlgorithmDESEDE3CBC
+	case EncryptionAlgorithmAES256CBC:
+		keySize = 32
+		blockSize = aes.BlockSize
+		alg = oidEncryptionAlgorithmAES256CBC
+	case EncryptionAlgorithmAES128CBC:
+		keySize = 16
+		blockSize = aes.BlockSize
+		alg = oidEncryptionAlgorithmAES128CBC
+	case EncryptionAlgorithmAES128GCM:
+		return encryptAES128GCM(content)
+	default:
+		return nil, nil, ErrUnsupportedEncryptionAlgorithm
+	}
+
+	// Create key & CBC IV
+	key := make([]byte, keySize)
+	iv := make([]byte, blockSize)
 	_, err := rand.Read(key)
 	if err != nil {
 		return nil, nil, err
@@ -888,11 +927,19 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 		return nil, nil, err
 	}
 
-	// Encrypt padded content
-	block, err := des.NewCipher(key)
+	switch contentEncryptionAlgorithm {
+	case EncryptionAlgorithmDESCBC:
+		block, err = des.NewCipher(key)
+	case EncryptionAlgorithmDESEDE3CBC:
+		block, err = des.NewTripleDESCipher(key)
+	case EncryptionAlgorithmAES256CBC, EncryptionAlgorithmAES128CBC:
+		block, err = aes.NewCipher(key)
+	}
+
 	if err != nil {
 		return nil, nil, err
 	}
+
 	mode := cipher.NewCBCEncrypter(block, iv)
 	plaintext, err := pad(content, mode.BlockSize())
 	cyphertext := make([]byte, len(plaintext))
@@ -902,7 +949,7 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 	eci := encryptedContentInfo{
 		ContentType: oidData,
 		ContentEncryptionAlgorithm: pkix.AlgorithmIdentifier{
-			Algorithm:  oidEncryptionAlgorithmDESCBC,
+			Algorithm:  alg,
 			Parameters: asn1.RawValue{Tag: 4, Bytes: iv},
 		},
 		EncryptedContent: marshalEncryptedContent(cyphertext),
@@ -956,22 +1003,9 @@ func Encrypt(content []byte, recipients []*x509.Certificate, opts ...Option) ([]
 	for _, opt := range opts {
 		opt(c)
 	}
-	var eci *encryptedContentInfo
-	var key []byte
-	var err error
 
 	// Apply chosen symmetric encryption method
-	switch c.ContentEncryptionAlgorithm {
-	case EncryptionAlgorithmDESCBC:
-		key, eci, err = encryptDESCBC(content)
-
-	case EncryptionAlgorithmAES128GCM:
-		key, eci, err = encryptAES128GCM(content)
-
-	default:
-		return nil, ErrUnsupportedEncryptionAlgorithm
-	}
-
+	key, eci, err := encrypt(content, c.ContentEncryptionAlgorithm)
 	if err != nil {
 		return nil, err
 	}
