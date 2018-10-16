@@ -165,10 +165,16 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 			return nil, err
 		}
 	}
+
 	// Compound octet string
 	if compound.IsCompound {
-		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
-			return nil, err
+		for len(compound.Bytes) > 0 {
+			var cdata asn1.RawValue
+			if _, err = asn1.Unmarshal(compound.Bytes, &cdata); err != nil {
+				return nil, err
+			}
+			content = append(content, cdata.Bytes...)
+			compound.Bytes = compound.Bytes[len(cdata.FullBytes):]
 		}
 	} else {
 		// assuming this is tag 04
@@ -301,8 +307,8 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
-  case oid.Equal(oidSHA256):
-    return crypto.SHA256, nil
+	case oid.Equal(oidSHA256):
+		return crypto.SHA256, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
