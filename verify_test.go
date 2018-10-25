@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io/ioutil"
@@ -251,6 +252,43 @@ VZXl0gKgxSOmDrcp1eQxdlymzrPv9U60wUJ0bkPfrU9qZj3mJrmrkQk61JTe3j6/
 QfjfFBG9JG2mUmYQP1KQ3SypGHzDW8vngvsGu//tNU0NFfOqQu4bYU4VpQl0nPtD
 4B85NkrgvQsWAQ==
 -----END PKCS7-----`
+
+func TestVerifyApkEcdsa(t *testing.T) {
+	fixture := UnmarshalTestFixture(ApkEcdsaFixture)
+	p7, err := Parse(fixture.Input)
+	if err != nil {
+		t.Errorf("Parse encountered unexpected error: %v", err)
+	}
+	p7.Content, err = base64.StdEncoding.DecodeString(ApkEcdsaContent)
+	if err != nil {
+		t.Errorf("Failed to decode base64 signature file: %v", err)
+	}
+	if err := p7.Verify(); err != nil {
+		t.Errorf("Verify failed with error: %v", err)
+	}
+}
+
+var ApkEcdsaFixture = `-----BEGIN PKCS7-----
+MIIDAgYJKoZIhvcNAQcCoIIC8zCCAu8CAQExDzANBglghkgBZQMEAgMFADALBgkq
+hkiG9w0BBwGgggH3MIIB8zCCAVSgAwIBAgIJAOxXdFsvm3YiMAoGCCqGSM49BAME
+MBIxEDAOBgNVBAMMB2VjLXA1MjEwHhcNMTYwMzMxMTUzMTIyWhcNNDMwODE3MTUz
+MTIyWjASMRAwDgYDVQQDDAdlYy1wNTIxMIGbMBAGByqGSM49AgEGBSuBBAAjA4GG
+AAQAYX95sSjPEQqgyLD04tNUyq9y/w8seblOpfqa/Amx6H4GFdrjGXX0YTfXKr9G
+hAyIyQSnNrIg0zDlWQUbBPRW4CYBLFOg1pUn1NBhKFD4NtO1KWvYtNOYDegFjRCP
+B0p+fEXDbq8QFDYvlh+NZUJ16+ih8XNIf1C29xuLEqN6oKOnAvajUDBOMB0GA1Ud
+DgQWBBT/Ra3kz60gQ7tYk3byZckcLabt8TAfBgNVHSMEGDAWgBT/Ra3kz60gQ7tY
+k3byZckcLabt8TAMBgNVHRMEBTADAQH/MAoGCCqGSM49BAMEA4GMADCBiAJCAP39
+hYLsWk2H84oEw+HJqGGjexhqeD3vSO1mWhopripE/81oy3yV10puYoJe11xDSfcD
+j2VfNCHazuXO3kSxGA/1AkIBLUJxp/WYbYzhBGKr6lcxczKI/wuMfkZ6vL+0EMJV
+A/2uEoeqvnl7BsdkicyaOBNEADijuVdaPPIWzKClt9OaVxExgdAwgc0CAQEwHzAS
+MRAwDgYDVQQDDAdlYy1wNTIxAgkA7Fd0Wy+bdiIwDQYJYIZIAWUDBAIDBQAwCgYI
+KoZIzj0EAwQEgYswgYgCQgD1pVSNo7qTm9A6tpt3SU2yRa+xpJAnUbpZ+Gu36B71
+JnQBUzRgTGevniqHpyagi7b2zjWh1uvfz9FfrITUwGMddgJCAPjiBRcl7rKpxmZn
+V1MvcJOX41xRSJu1wmBiYXqaJarL+gQ/Wl7RYsMtqLjmNColvLaHNxCaWOO/8nAE
+Hg0OMA60
+-----END PKCS7-----`
+
+var ApkEcdsaContent = `U2lnbmF0dXJlLVZlcnNpb246IDEuMA0KU0hBLTUxMi1EaWdlc3QtTWFuaWZlc3Q6IFAvVDRqSWtTMjQvNzFxeFE2WW1MeEtNdkRPUUF0WjUxR090dFRzUU9yemhHRQ0KIEpaUGVpWUtyUzZYY090bStYaWlFVC9uS2tYdWVtUVBwZ2RBRzFKUzFnPT0NCkNyZWF0ZWQtQnk6IDEuMCAoQW5kcm9pZCBTaWduQXBrKQ0KDQpOYW1lOiBBbmRyb2lkTWFuaWZlc3QueG1sDQpTSEEtNTEyLURpZ2VzdDogcm9NbWVQZmllYUNQSjFJK2VzMVpsYis0anB2UXowNHZqRWVpL2U0dkN1ald0VVVWSHEzMkNXDQogMUxsOHZiZGMzMCtRc1FlN29ibld4dmhLdXN2K3c1a2c9PQ0KDQpOYW1lOiByZXNvdXJjZXMuYXJzYw0KU0hBLTUxMi1EaWdlc3Q6IG5aYW1aUzlPZTRBRW41cEZaaCtoQ1JFT3krb1N6a3hHdU5YZU0wUFF6WGVBVlVQV3hSVzFPYQ0KIGVLbThRbXdmTmhhaS9HOEcwRUhIbHZEQWdlcy9HUGtBPT0NCg0KTmFtZTogY2xhc3Nlcy5kZXgNClNIQS01MTItRGlnZXN0OiBlbWlDQld2bkVSb0g2N2lCa3EwcUgrdm5tMkpaZDlMWUNEV051N3RNYzJ3bTRtV0dYSUVpWmcNCiBWZkVPV083MFRlZnFjUVhldkNtN2hQMnRpT0U3Y0w5UT09DQoNCg==`
 
 func TestVerifyFirefoxAddon(t *testing.T) {
 	fixture := UnmarshalTestFixture(FirefoxAddonFixture)
