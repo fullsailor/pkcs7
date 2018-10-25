@@ -3,6 +3,7 @@ package pkcs7
 import (
 	"bytes"
 	"crypto"
+	"crypto/dsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -273,11 +274,6 @@ func cert2issuerAndSerial(cert *x509.Certificate) (issuerAndSerial, error) {
 
 // signs the DER encoded form of the attributes with the private key
 func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.Hash) ([]byte, error) {
-	key, ok := pkey.(crypto.Signer)
-	if !ok {
-		return nil, errors.New("pkcs7: private key does not implement crypto.Signer")
-	}
-
 	attrBytes, err := marshalAttributes(attrs)
 	if err != nil {
 		return nil, err
@@ -286,7 +282,25 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.
 	h.Write(attrBytes)
 	hash := h.Sum(nil)
 
+	// dsa doesn't implement crypto.Signer so we make a special case
+	switch pkey.(type) {
+	case *dsa.PrivateKey:
+		r, s, err := dsa.Sign(rand.Reader, pkey.(*dsa.PrivateKey), hash)
+		if err != nil {
+			return nil, err
+		}
+		return asn1.Marshal(dsaSignature{r, s})
+	}
+
+	key, ok := pkey.(crypto.Signer)
+	if !ok {
+		return nil, errors.New("pkcs7: private key does not implement crypto.Signer")
+	}
 	return key.Sign(rand.Reader, hash, digestAlg)
+}
+
+type dsaSignature struct {
+	R, S *big.Int
 }
 
 // concats and wraps the certificates in the RawValue structure
