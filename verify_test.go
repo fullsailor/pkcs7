@@ -574,7 +574,6 @@ but that's not what ships are built for.
 				if err != nil {
 					t.Fatal(err)
 				}
-				fmt.Printf("%s\n", pemSignature)
 				derBlock, _ := pem.Decode(pemSignature)
 				if derBlock == nil {
 					break

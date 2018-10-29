@@ -207,6 +207,7 @@ func (sd *SignedData) SignWithoutAttr(ee *x509.Certificate, pkey crypto.PrivateK
 	switch pkey.(type) {
 	case *dsa.PrivateKey:
 		// dsa doesn't implement crypto.Signer so we make a special case
+		// https://github.com/golang/go/issues/27889
 		r, s, err := dsa.Sign(rand.Reader, pkey.(*dsa.PrivateKey), sd.messageDigest)
 		if err != nil {
 			return err
@@ -346,6 +347,7 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, digestAlg crypto.
 	hash := h.Sum(nil)
 
 	// dsa doesn't implement crypto.Signer so we make a special case
+	// https://github.com/golang/go/issues/27889
 	switch pkey.(type) {
 	case *dsa.PrivateKey:
 		r, s, err := dsa.Sign(rand.Reader, pkey.(*dsa.PrivateKey), hash)
