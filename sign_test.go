@@ -127,7 +127,7 @@ func TestDSASignAndVerifyWithOpenSSL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("test case: cannot initialize signed data: %s", err)
 	}
-	if err := toBeSigned.AddSigner(signerCert, &priv, SignerInfoConfig{}); err != nil {
+	if err := toBeSigned.SignWithoutAttr(signerCert, &priv, SignerInfoConfig{}); err != nil {
 		t.Fatalf("Cannot add signer: %s", err)
 	}
 	toBeSigned.Detach()
