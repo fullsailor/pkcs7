@@ -2,12 +2,14 @@ package pkcs7
 
 import (
 	"bytes"
+	"crypto/dsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"testing"
@@ -88,98 +90,70 @@ func TestSign(t *testing.T) {
 	}
 }
 
-func TestSignAndVerifyWithOpenSSL(t *testing.T) {
+func TestDSASignAndVerifyWithOpenSSL(t *testing.T) {
 	content := []byte("Hello World")
 	// write the content to a temp file
-	tmpContentFile, err := ioutil.TempFile("", "TestSignAndVerifyWithOpenSSL_content")
+	tmpContentFile, err := ioutil.TempFile("", "TestDSASignAndVerifyWithOpenSSL_content")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ioutil.WriteFile(tmpContentFile.Name(), content, 0755)
 
-	sigalgs := []x509.SignatureAlgorithm{
-		x509.SHA1WithRSA,
-		x509.SHA256WithRSA,
-		x509.SHA512WithRSA,
-		x509.ECDSAWithSHA1,
-		x509.ECDSAWithSHA256,
-		x509.ECDSAWithSHA384,
-		x509.ECDSAWithSHA512,
+	block, _ := pem.Decode([]byte(dsaPublicCert))
+	if block == nil {
+		t.Fatal("failed to parse certificate PEM")
 	}
-	for i, sigalg := range sigalgs {
-		log.Printf("test case %d sigalg %s\n", i, sigalg)
-		rootCert, err := createTestCertificateByIssuer("PKCS7 Test Root CA", nil, sigalg, true)
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: cannot generate root cert: %s", i, sigalg, err)
-		}
-		// write the root cert to a temp file
-		tmpRootCertFile, err := ioutil.TempFile("", "TestSignAndVerifyWithOpenSSL_root")
-		if err != nil {
-			t.Fatal(err)
-		}
-		fd, err := os.OpenFile(tmpRootCertFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pem.Encode(fd, &pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Certificate.Raw})
-		fd.Close()
-
-		interCert, err := createTestCertificateByIssuer("PKCS7 Test Intermediate CA", rootCert, sigalg, true)
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: cannot generate intermediate cert: %s", i, sigalg, err)
-		}
-		var intermediates []*x509.Certificate
-		intermediates = append(intermediates, interCert.Certificate)
-		signerCert, err := createTestCertificateByIssuer("PKCS7 Test Signer Cert", interCert, sigalg, false)
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: cannot generate signer cert: %s", i, sigalg, err)
-		}
-
-		// write the signer cert to a temp file
-		tmpSignerCertFile, err := ioutil.TempFile("", "TestSignAndVerifyWithOpenSSL_signer")
-		if err != nil {
-			t.Fatal(err)
-		}
-		fd, err = os.OpenFile(tmpSignerCertFile.Name(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pem.Encode(fd, &pem.Block{Type: "CERTIFICATE", Bytes: signerCert.Certificate.Raw})
-		fd.Close()
-
-		toBeSigned, err := NewSignedData(content)
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: cannot initialize signed data: %s", i, sigalg, err)
-		}
-		if err := toBeSigned.AddSignerChain(signerCert.Certificate, *signerCert.PrivateKey, intermediates, SignerInfoConfig{}); err != nil {
-			t.Fatalf("Cannot add signer: %s", err)
-		}
-		toBeSigned.Detach()
-		signed, err := toBeSigned.Finish()
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: cannot finish signing data: %s", i, sigalg, err)
-		}
-
-		// write the signature to a temp file
-		tmpSignatureFile, err := ioutil.TempFile("", "TestSignAndVerifyWithOpenSSL_signature")
-		if err != nil {
-			t.Fatal(err)
-		}
-		ioutil.WriteFile(tmpSignatureFile.Name(), pem.EncodeToMemory(&pem.Block{Type: "PKCS7", Bytes: signed}), 0755)
-
-		// call openssl to verify the signature on the content using the root
-		opensslCMD := exec.Command("openssl", "smime", "-verify",
-			"-in", tmpSignatureFile.Name(), "-inform", "PEM",
-			"-content", tmpContentFile.Name(),
-			"-CAfile", tmpRootCertFile.Name())
-		out, err := opensslCMD.CombinedOutput()
-		if err != nil {
-			t.Fatalf("test case %d sigalg %s: openssl command failed with %s: %s", i, sigalg, err, out)
-		}
-		os.Remove(tmpSignatureFile.Name()) // clean up
-		os.Remove(tmpRootCertFile.Name())  // clean up
+	signerCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal("failed to parse certificate: " + err.Error())
 	}
-	os.Remove(tmpContentFile.Name()) // clean up
+
+	// write the signer cert to a temp file
+	tmpSignerCertFile, err := ioutil.TempFile("", "TestDSASignAndVerifyWithOpenSSL_signer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ioutil.WriteFile(tmpSignerCertFile.Name(), dsaPublicCert, 0755)
+
+	priv := dsa.PrivateKey{
+		PublicKey: dsa.PublicKey{Parameters: dsa.Parameters{P: fromHex("fd7f53811d75122952df4a9c2eece4e7f611b7523cef4400c31e3f80b6512669455d402251fb593d8d58fabfc5f5ba30f6cb9b556cd7813b801d346ff26660b76b9950a5a49f9fe8047b1022c24fbba9d7feb7c61bf83b57e7c6a8a6150f04fb83f6d3c51ec3023554135a169132f675f3ae2b61d72aeff22203199dd14801c7"),
+			Q: fromHex("9760508F15230BCCB292B982A2EB840BF0581CF5"),
+			G: fromHex("F7E1A085D69B3DDECBBCAB5C36B857B97994AFBBFA3AEA82F9574C0B3D0782675159578EBAD4594FE67107108180B449167123E84C281613B7CF09328CC8A6E13C167A8B547C8D28E0A3AE1E2BB3A675916EA37F0BFA213562F1FB627A01243BCCA4F1BEA8519089A883DFE15AE59F06928B665E807B552564014C3BFECF492A"),
+		},
+		},
+		X: fromHex("7D6E1A3DD4019FD809669D8AB8DA73807CEF7EC1"),
+	}
+	toBeSigned, err := NewSignedData(content)
+	if err != nil {
+		t.Fatalf("test case: cannot initialize signed data: %s", err)
+	}
+	if err := toBeSigned.SignWithoutAttr(signerCert, &priv, SignerInfoConfig{}); err != nil {
+		t.Fatalf("Cannot add signer: %s", err)
+	}
+	toBeSigned.Detach()
+	signed, err := toBeSigned.Finish()
+	if err != nil {
+		t.Fatalf("test case: cannot finish signing data: %s", err)
+	}
+
+	// write the signature to a temp file
+	tmpSignatureFile, err := ioutil.TempFile("", "TestDSASignAndVerifyWithOpenSSL_signature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ioutil.WriteFile(tmpSignatureFile.Name(), pem.EncodeToMemory(&pem.Block{Type: "PKCS7", Bytes: signed}), 0755)
+
+	// call openssl to verify the signature on the content using the root
+	opensslCMD := exec.Command("openssl", "smime", "-verify", "-noverify",
+		"-in", tmpSignatureFile.Name(), "-inform", "PEM",
+		"-content", tmpContentFile.Name())
+	out, err := opensslCMD.CombinedOutput()
+	if err != nil {
+		t.Fatalf("test case: openssl command failed with %s: %s", err, out)
+	}
+	os.Remove(tmpSignatureFile.Name())  // clean up
+	os.Remove(tmpContentFile.Name())    // clean up
+	os.Remove(tmpSignerCertFile.Name()) // clean up
 }
 
 func ExampleSignedData() {
@@ -282,4 +256,11 @@ func testOpenSSLParse(t *testing.T, certBytes []byte) {
 		t.Fatal(err)
 	}
 
+}
+func fromHex(s string) *big.Int {
+	result, ok := new(big.Int).SetString(s, 16)
+	if !ok {
+		panic(s)
+	}
+	return result
 }
