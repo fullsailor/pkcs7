@@ -165,10 +165,16 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 			return nil, err
 		}
 	}
+
 	// Compound octet string
 	if compound.IsCompound {
-		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
-			return nil, err
+		for len(compound.Bytes) > 0 {
+			var cdata asn1.RawValue
+			if _, err = asn1.Unmarshal(compound.Bytes, &cdata); err != nil {
+				return nil, err
+			}
+			content = append(content, cdata.Bytes...)
+			compound.Bytes = compound.Bytes[len(cdata.FullBytes):]
 		}
 	} else {
 		// assuming this is tag 04
@@ -284,8 +290,9 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 }
 
 var (
-	oidDigestAlgorithmSHA1    = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
-	oidEncryptionAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidDigestAlgorithmSHA1        = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
+	oidEncryptionAlgorithmRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidEncryptionAlgorithmSHA1RSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
 )
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
@@ -301,8 +308,10 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
-  case oid.Equal(oidSHA256):
-    return crypto.SHA256, nil
+	case oid.Equal(oidEncryptionAlgorithmSHA1RSA):
+		return crypto.SHA1, nil
+	case oid.Equal(oidSHA256):
+		return crypto.SHA256, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
