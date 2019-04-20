@@ -299,10 +299,24 @@ func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndS
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
-	case oid.Equal(oidDigestAlgorithmSHA1):
+	case oid.Equal(oidDigestAlgorithmSHA1),
+		oid.Equal(oidSignatureSHA1WithRSA),
+		oid.Equal(oidSignatureDSAWithSHA1),
+		oid.Equal(oidSignatureECDSAWithSHA1):
 		return crypto.SHA1, nil
-  case oid.Equal(oidSHA256):
-    return crypto.SHA256, nil
+	case oid.Equal(oidSHA256),
+		oid.Equal(oidSignatureSHA256WithRSA),
+		oid.Equal(oidSignatureDSAWithSHA256),
+		oid.Equal(oidSignatureECDSAWithSHA256):
+		return crypto.SHA256, nil
+	case oid.Equal(oidSHA384),
+		oid.Equal(oidSignatureSHA384WithRSA),
+		oid.Equal(oidSignatureECDSAWithSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidSHA512),
+		oid.Equal(oidSignatureSHA512WithRSA),
+		oid.Equal(oidSignatureECDSAWithSHA512):
+		return crypto.SHA512, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
