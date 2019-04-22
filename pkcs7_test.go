@@ -26,7 +26,7 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Parse encountered unexpected error: %v", err)
 	}
 
-	if err := p7.Verify(); err != nil {
+	if err := p7.Verify(nil); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
 	}
 	expected := []byte("We the People")
@@ -43,7 +43,7 @@ func TestVerifyEC2(t *testing.T) {
 		t.Errorf("Parse encountered unexpected error: %v", err)
 	}
 	p7.Certificates = []*x509.Certificate{fixture.Certificate}
-	if err := p7.Verify(); err != nil {
+	if err := p7.Verify(&VerifyOptions{VerifySignatureTime: true}); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
 	}
 }
@@ -54,7 +54,7 @@ func TestVerifyAppStore(t *testing.T) {
 	if err != nil {
 		t.Errorf("Parse encountered unexpected error: %v", err)
 	}
-	if err := p7.Verify(); err != nil {
+	if err := p7.Verify(nil); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestSign(t *testing.T) {
 		if bytes.Compare(content, p7.Content) != 0 {
 			t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
 		}
-		if err := p7.Verify(); err != nil {
+		if err := p7.Verify(nil); err != nil {
 			t.Errorf("Cannot verify our signed data: %s", err)
 		}
 	}
@@ -375,10 +375,12 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair) (*certKeyPa
 		NotAfter:    time.Now().AddDate(1, 0, 0),
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
+		BasicConstraintsValid: true,
 	}
 	var issuerCert *x509.Certificate
 	var issuerKey crypto.PrivateKey
 	if issuer != nil {
+		template.IsCA = false
 		issuerCert = issuer.Certificate
 		issuerKey = issuer.PrivateKey
 	} else {
@@ -440,6 +442,159 @@ func MarshalTestFixture(t TestFixture, w io.Writer) {
 		pem.Encode(w, &pem.Block{Type: "PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(t.PrivateKey)})
 	}
 }
+
+func TestInvalidSignature(t *testing.T) {
+	rootCert, err := createTestCertificateByIssuer("Root CA", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingCert, err := createTestCertificateByIssuer("Signing Cert", rootCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte("Hello, World!")
+	createAndVerifyTest := func(modifier func(p7 *PKCS7)) error {
+		toBeSigned, err := NewSignedData(content)
+		if err != nil {
+			t.Fatalf("Cannot initialize signed data: %s", err)
+		}
+		if err := toBeSigned.AddSigner(signingCert.Certificate, signingCert.PrivateKey, SignerInfoConfig{}); err != nil {
+			t.Fatalf("Cannot add signer: %s", err)
+		}
+		signed, err := toBeSigned.Finish()
+		if err != nil {
+			t.Fatalf("Cannot finish signing data: %s", err)
+		}
+		pem.Encode(os.Stdout, &pem.Block{Type: "PKCS7", Bytes: signed})
+		p7, err := Parse(signed)
+		if err != nil {
+			t.Fatalf("Cannot parse our signed data: %s", err)
+		}
+		if bytes.Compare(content, p7.Content) != 0 {
+			t.Errorf("Our content was not in the parsed data:\n\tExpected: %s\n\tActual: %s", content, p7.Content)
+		}
+
+		if modifier != nil {
+			modifier(p7)
+		}
+
+		opts := &VerifyOptions{
+			VerifySignatureTime: true,
+			TrustStore: x509.NewCertPool(),
+		}
+		opts.TrustStore.AddCert(rootCert.Certificate)
+		return p7.Verify(opts)
+	}
+
+	err = createAndVerifyTest(nil)
+	if err != nil {
+		t.Errorf("Got verification error for what should have been valid: %v", err)
+	}
+	err = createAndVerifyTest(func(p7 *PKCS7) {
+		p7.Content = []byte("Modified content!")
+	})
+	if err == nil {
+		t.Error("Should have gotten a verification error when content was modified.")
+	}
+
+	err = createAndVerifyTest(func(p7 *PKCS7) {
+		// Find and modify the content hash
+		signerInfo := p7.Signers[0]
+		hash, err := getHashForOID(signerInfo.DigestAlgorithm.Algorithm)
+		if err != nil {
+			t.Fatal("Unable to resolve hash")
+		}
+		h := hash.New()
+		h.Write([]byte("Alternate content for hashing"))
+		computed := h.Sum(nil)
+		for idx, attr := range signerInfo.AuthenticatedAttributes {
+			if attr.Type.Equal(oidAttributeMessageDigest) {
+				marshaledBytes, err := asn1.Marshal(computed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				attr.Value.Bytes = marshaledBytes
+				signerInfo.AuthenticatedAttributes[idx] = attr
+				break
+			}
+		}
+	})
+	if err == nil {
+		t.Error("Should have gotten a verification error when content hash was modified.")
+	}
+
+	err = createAndVerifyTest(func(p7 *PKCS7) {
+		altSigningCert, err := createTestCertificateByIssuer("Alternate signing cert", rootCert)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		p7.Certificates = []*x509.Certificate{altSigningCert.Certificate}
+	})
+	if err == nil {
+		t.Error("Should have gotten a verification error when a non-matching certificate was included.")
+	}
+
+	err = createAndVerifyTest(func(p7 *PKCS7) {
+		signerInfo := p7.Signers[0]
+		for idx, attr := range signerInfo.AuthenticatedAttributes {
+			if attr.Type.Equal(oidAttributeSigningTime) {
+				timeBytes, err := asn1.Marshal(time.Now().Add(-24 * time.Hour))
+				if err != nil {
+					t.Fatalf("Unable to marshal time: %v", err)
+				}
+				attr.Value.Bytes = timeBytes
+				signerInfo.AuthenticatedAttributes[idx] = attr
+				break
+			}
+		}
+	})
+	if err == nil {
+		t.Error("Should have gotten a verification error when signing time is outside certificate validity.")
+	}
+
+	err = createAndVerifyTest(func(p7 *PKCS7) {
+		signerInfo := p7.Signers[0]
+		attrs := signerInfo.AuthenticatedAttributes
+		for idx, attr := range attrs {
+			if attr.Type.Equal(oidAttributeSigningTime) {
+				signerInfo.AuthenticatedAttributes = append(attrs[:idx], attrs[idx+1:]...)
+				break
+			}
+		}
+	})
+	if err == nil {
+		t.Error("Should have gotten a verification error when signing time is missing.")
+	}
+
+	originalSigningCert := signingCert
+	{
+		altRoot, err := createTestCertificateByIssuer("Alternate Root CA", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		altSigningCert, err := createTestCertificateByIssuer("Alternate signing cert", altRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		signingCert = altSigningCert
+	}
+	err = createAndVerifyTest(nil)
+	if err == nil {
+		t.Error("Should have gotten a verification error when using an untrusted certificate.")
+	}
+	signingCert = originalSigningCert
+
+	
+	// Sanity check original passing test still passes
+	err = createAndVerifyTest(nil)
+	if err != nil {
+		t.Errorf("Got verification error for what should have been valid: %v", err)
+	}
+}
+
 
 var SignedTestFixture = `
 -----BEGIN PKCS7-----
