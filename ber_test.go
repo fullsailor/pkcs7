@@ -42,11 +42,18 @@ func TestBer2Der_Negatives(t *testing.T) {
 		Input         []byte
 		ErrorContains string
 	}{
-		{[]byte{0x30, 0x85}, "length too long"},
+		{[]byte{0x30, 0x85}, "not enough"},
+		{[]byte{0x30, 0x85, 0x00}, "length too long"},
 		{[]byte{0x30, 0x84, 0x80, 0x0, 0x0, 0x0}, "length is negative"},
 		{[]byte{0x30, 0x82, 0x0, 0x1}, "length has leading zero"},
 		{[]byte{0x30, 0x80, 0x1, 0x2, 0x1, 0x2}, "Invalid BER format"},
 		{[]byte{0x30, 0x03, 0x01, 0x02}, "length is more than available data"},
+		{[]byte{0x1f}, "not enough bytes to read tag"},
+		{[]byte{0x1f, 0x80, 0x81, 0xff}, "not enough bytes to read tag"},
+		{[]byte{0x1f, 0x00}, "not enough bytes to read length"},
+		{[]byte{0x1f, 0x00, 0xf0}, "not enough bytes to read length"},
+		{[]byte{0x1f, 0x00, 0x83}, "not enough bytes to read length"},
+		{[]byte{0x1f, 0x00, 0x83, 0xff}, "not enough bytes to read length"},
 	}
 
 	for _, fixture := range fixtures {

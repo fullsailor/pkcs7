@@ -135,14 +135,24 @@ func encodeLength(out *bytes.Buffer, length int) (err error) {
 func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	//fmt.Printf("\n====> Starting readObject at offset: %d\n\n", offset)
 	tagStart := offset
+	if offset >= len(ber) {
+		return nil, 0, errors.New("ber2der: not enough bytes to read tag")
+	}
 	b := ber[offset]
 	offset++
+
 	tag := b & 0x1F // last 5 bits
 	if tag == 0x1F {
 		tag = 0
+		if offset >= len(ber) {
+			return nil, 0, errors.New("ber2der: not enough bytes to read tag")
+		}
 		for ber[offset] >= 0x80 {
 			tag = tag*128 + ber[offset] - 0x80
 			offset++
+			if offset >= len(ber) {
+				return nil, 0, errors.New("ber2der: not enough bytes to read tag")
+			}
 		}
 		tag = tag*128 + ber[offset] - 0x80
 		offset++
@@ -159,10 +169,17 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	*/
 	// read length
 	var length int
+	if offset >= len(ber) {
+		return nil, 0, errors.New("ber2der: not enough bytes to read length")
+	}
 	l := ber[offset]
 	offset++
 	indefinite := false
 	if l > 0x80 {
+		if offset >= len(ber) {
+			return nil, 0, errors.New("ber2der: not enough bytes to read length")
+		}
+
 		numberOfBytes := (int)(l & 0x7F)
 		if numberOfBytes > 4 { // int is only guaranteed to be 32bit
 			return nil, 0, errors.New("ber2der: BER tag length too long")
@@ -172,6 +189,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		}
 		if 0x0 == (int)(ber[offset]) {
 			return nil, 0, errors.New("ber2der: BER tag length has leading zero")
+		}
+		if offset+numberOfBytes > len(ber) {
+			return nil, 0, errors.New("ber2der: not enough bytes to read length")
 		}
 		//fmt.Printf("--> (compute length) indicator byte: %x\n", l)
 		//fmt.Printf("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
@@ -240,7 +260,7 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 }
 
 func isIndefiniteTermination(ber []byte, offset int) (bool, error) {
-	if len(ber) - offset < 2 {
+	if len(ber)-offset < 2 {
 		return false, errors.New("ber2der: Invalid BER format")
 	}
 
