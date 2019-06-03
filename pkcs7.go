@@ -91,7 +91,7 @@ type recipientInfo struct {
 type encryptedContentInfo struct {
 	ContentType                asn1.ObjectIdentifier
 	ContentEncryptionAlgorithm pkix.AlgorithmIdentifier
-	EncryptedContent           asn1.RawValue `asn1:"tag:0,optional,explicit"`
+	EncryptedContent           asn1.RawValue `asn1:"tag:0,optional"`
 }
 
 type attribute struct {
@@ -705,7 +705,7 @@ func (sd *SignedData) AddCertificate(cert *x509.Certificate) {
 // Detach removes content from the signed data struct to make it a detached signature.
 // This must be called right before Finish()
 func (sd *SignedData) Detach() {
-	sd.sd.ContentInfo = contentInfo{ContentType: oidSignedData}
+	sd.sd.ContentInfo = contentInfo{ContentType: oidData}
 }
 
 // Finish marshals the content and its signers
