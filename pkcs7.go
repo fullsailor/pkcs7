@@ -198,8 +198,11 @@ func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 	if _, err := asn1.Unmarshal(raw.Raw, &val); err != nil {
 		return nil, errors.Wrap(err, "unmarshaling certificates asn1")
 	}
-
-	res, err := x509.ParseCertificates(val.Bytes)
+	data := val.Bytes
+	if val.Class != 2 {
+		data = val.FullBytes
+	}
+	res, err := x509.ParseCertificates(data)
 	err = errors.Wrap(err, "parsing x509 certificates")
 	return res, err
 }
