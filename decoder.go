@@ -9,7 +9,7 @@ import (
 	"hash"
 	"io"
 
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 // NewDecoder creates stream PKCS7 decoder
@@ -25,20 +25,22 @@ func (p7 *PKCS7) buildHashes(dest io.Writer) continuation {
 		for _, h := range p7.hashes {
 			r = io.TeeReader(r, h)
 		}
-		_, err = io.Copy(dest, r)
-		return errors.Wrap(err, "buildHashes")
+		if _, err = io.Copy(dest, r); err != nil {
+			return xerrors.Errorf("buildHashes: %w", err)
+		}
+		return nil
 	}
 }
 
 func (p7 *PKCS7) initHashes(class int, constructed bool, tag int, length int) (err error) {
 	if err = p7.r.object(&p7.digestAlgorithmIdentifiers, "set")(class, constructed, tag, length); err != nil {
-		return errors.WithMessage(err, "initHashes")
+		return xerrors.Errorf("initHashes: %w", err)
 	}
 	p7.hashes = make(map[crypto.Hash]hash.Hash)
-	for _, aid := range p7.digestAlgorithmIdentifiers {
+	for i, aid := range p7.digestAlgorithmIdentifiers {
 		hash, err := getHashForOID(aid.Algorithm)
 		if err != nil {
-			return errors.WithMessage(err, "initHashes")
+			return xerrors.Errorf("get hash for digest %d: %w", i, err)
 		}
 		p7.hashes[hash] = hash.New()
 	}
@@ -54,7 +56,7 @@ func (p7 *PKCS7) verifySignature(i int) error {
 	}
 	hash, ok := p7.hashes[hashType]
 	if !ok {
-		return errors.Errorf("hash for signer %d not found", i)
+		return xerrors.Errorf("hash for signer %d not found", i)
 	}
 	computed := hash.Sum(nil)
 	if len(signer.AuthenticatedAttributes) > 0 {
@@ -78,7 +80,7 @@ func (p7 *PKCS7) verifySignature(i int) error {
 	}
 	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
 	if cert == nil {
-		return errors.New("pkcs7: No certificate for signer")
+		return xerrors.New("pkcs7: No certificate for signer")
 	}
 
 	algo, err := getSignAlgorithm(signer.DigestAlgorithm.Algorithm)
@@ -95,7 +97,7 @@ func (p7 *PKCS7) verifySignature(i int) error {
 		}
 		return rsa.VerifyPKCS1v15(pub, hashType, computed, signer.EncryptedDigest)
 	}
-	return errors.Errorf("unsupported signature algorithm: %v", algo)
+	return xerrors.Errorf("unsupported signature algorithm: %v", algo)
 }
 
 // portions Copyright 2009 The Go Authors.
@@ -128,14 +130,18 @@ func (p7 *PKCS7) VerifyTo(dest io.Writer) error {
 							),
 						),
 					),
-					br.raw(0, true, func(data []byte) (err error) {
+					br.raw(0, true, func(data []byte) error {
 						certificates.Raw = data
-						p7.Certificates, err = certificates.Parse()
-						return
+						certs, err := certificates.Parse()
+						if err != nil {
+							return xerrors.Errorf("parse certificates: %w", err)
+						}
+						p7.Certificates = certs
+						return nil
 					}),
-					br.raw(1, true, func(data []byte) (err error) {
-						_, err = asn1.UnmarshalWithParams(data, &p7.CRLs, "optional,tag:1")
-						return errors.Wrap(err, "unmarshaling CRLs")
+					br.raw(1, true, func(data []byte) error {
+						_, err := asn1.UnmarshalWithParams(data, &p7.CRLs, "optional,tag:1")
+						return xerrors.Errorf("unmarshaling CRLs: %w", err)
 					}),
 					br.object(&p7.Signers, "set"),
 				),

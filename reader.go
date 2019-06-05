@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 type berReader struct {
@@ -177,12 +178,18 @@ func (br *berReader) raw(expected int, optional bool, process func([]byte) error
 func (br *berReader) octets(next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if tag != 4 {
-			return errors.Wrap(perr("expected tag 4 got %d", tag), "octets")
+			return xerrors.Errorf("octets: %w", perr("expected tag 4 got %d", tag))
 		}
 		if length < 0 {
-			return errors.WithMessage(br.readBER(br.combine(next, br.endOctets())), "octets")
+			if err := br.readBER(br.combine(next, br.endOctets())); err != nil {
+				return xerrors.Errorf("octets: %w", err)
+			}
+			return nil
 		}
-		return errors.WithMessage(next(class, constructed, tag, length), "octets")
+		if err := next(class, constructed, tag, length); err != nil {
+			return xerrors.Errorf("octets: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -191,10 +198,10 @@ func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuat
 		func(class int, constructed bool, tag int, length int) (err error) {
 			var actual asn1.ObjectIdentifier
 			if err = br.object(&actual, "")(class, constructed, tag, length); err != nil {
-				return errors.WithMessage(err, "oid")
+				return xerrors.Errorf("oid: %w", err)
 			}
 			if !actual.Equal(oid) {
-				return errors.Wrap(perr("expected oid %q got oid %q", oid, actual), "oid")
+				return xerrors.Errorf("oid: %w", perr("expected oid %q got oid %q", oid, actual))
 			}
 			return nil
 		}, next)
@@ -205,7 +212,7 @@ func (br *berReader) combine(conts ...continuation) continuation {
 		n := len(conts) - 1
 		for i, cont := range conts {
 			err = cont(class, constructed, tag, length)
-			if errors.Cause(err) == errConditionNotMet {
+			if xerrors.Is(err, errConditionNotMet) {
 				err = nil
 				continue
 			} else if err != nil || i == n {
