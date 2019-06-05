@@ -139,16 +139,22 @@ func TestVerifyData(t *testing.T) {
 			return err
 		}
 		defer fp.Close()
-		p7 := NewDecoder(fp)
-		if err = p7.VerifyTo(ioutil.Discard); err != nil {
-			return err
-		}
-		signer := p7.GetOnlySigner()
-		if signer == nil || len(signer.Raw) == 0 {
-			t.Errorf("no signer for %s", path)
-			return nil
-		}
-		t.Logf("verify success on %s", filepath.Base(path))
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			p7 := NewDecoder(fp)
+			buf := new(bytes.Buffer)
+			if err = p7.VerifyTo(buf); err != nil {
+				t.Errorf("%+v", err)
+				return
+			}
+			signer := p7.GetOnlySigner()
+			if signer == nil || len(signer.Raw) == 0 {
+				t.Errorf("no signer for %s", path)
+				return
+			}
+			fn := strings.TrimSuffix(filepath.Base(path), ".cms")
+			t.Logf("verify success on %s", fn)
+			ioutil.WriteFile(filepath.Join("fixtures", fn+".bin"), buf.Bytes(), os.ModePerm)
+		})
 		return nil
 	}); err != nil {
 		t.Errorf("%+v", err)

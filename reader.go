@@ -4,10 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/asn1"
-	"fmt"
+	"errors"
 	"io"
 
-	"github.com/pkg/errors"
 	"golang.org/x/xerrors"
 )
 
@@ -24,7 +23,10 @@ func (br *berReader) ReadByte() (res byte, err error) {
 	if res, err = br.Reader.ReadByte(); err == nil {
 		br.bytesRead++
 	}
-	return res, errors.Wrap(err, "read from buffer")
+	if err != nil {
+		return res, xerrors.Errorf("read from buffer: %w", err)
+	}
+	return res, nil
 }
 
 func (br *berReader) Read(dest []byte) (n int, err error) {
@@ -74,16 +76,6 @@ func (br *berReader) readBER(cont continuation) (rErr error) {
 	return cont(class, constructed, tag, length)
 }
 
-type predicateError string
-
-func (pe predicateError) Error() string {
-	return string(pe)
-}
-
-func perr(f string, vs ...interface{}) error {
-	return predicateError(fmt.Sprintf(f, vs...))
-}
-
 type predicate func(class int, constructed bool, tag int, length int) error
 
 var errConditionNotMet = errors.New("optional condition not met")
@@ -91,41 +83,78 @@ var errConditionNotMet = errors.New("optional condition not met")
 func (br *berReader) optional(expected int, next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if expected == tag && length != 0 {
-			return errors.WithMessage(br.sequence(next)(class, constructed, tag, length), fmt.Sprintf("optional[%d]", tag))
+			if err := br._sequence(next)(class, constructed, tag, length); err != nil {
+				return xerrors.Errorf("optional[%d]: %w", tag, err)
+			}
+			return nil
 		}
 		return errConditionNotMet
 	}
 }
 
+func (br *berReader) _repeat(next continuation) error {
+	for {
+		err := br.readBER(next)
+		if xerrors.Is(err, errConditionNotMet) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
+}
+
 func (br *berReader) tag(expected int) predicate {
+	return func(class int, constructed bool, tag int, length int) error {
+		if err := br._tag(expected)(class, constructed, tag, length); err != nil {
+			return xerrors.Errorf("tag: %w", err)
+		}
+		return nil
+	}
+}
+
+func (br *berReader) _tag(expected int) predicate {
 	return func(class int, constructed bool, tag int, length int) error {
 		if expected == tag {
 			return nil
 		}
-		return errors.Wrap(perr("expected tag %d got %d", expected, tag), "tag")
+		return xerrors.Errorf("expected tag %d got %d", expected, tag)
 	}
 }
 
 func (br *berReader) explicit(expected int, next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		if expected != tag {
-			return errors.Wrap(perr("expected explicit tag %d got %d", expected, tag), "explicit")
+			return xerrors.Errorf("explicit: expected explicit tag %d got %d", expected, tag)
 		}
-		return errors.WithMessage(br.readBER(next), "explicit")
+		if err := br.readBER(next); err != nil {
+			return xerrors.Errorf("explicit: %w", err)
+		}
+		return nil
 	}
 }
 
 func (br *berReader) object(dest interface{}, params string) continuation {
-	return br.raw(-1, false, func(data []byte) (err error) {
-		_, err = asn1.UnmarshalWithParams(data, dest, params)
-		return errors.Wrap(err, "object")
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		if err := br._object(dest, params)(class, constructed, tag, length); err != nil {
+			return xerrors.Errorf("object: %w", err)
+		}
+		return nil
+	}
+}
+
+func (br *berReader) _object(dest interface{}, params string) continuation {
+	return br._raw(-1, false, func(data []byte) (err error) {
+		if _, err = asn1.UnmarshalWithParams(data, dest, params); err != nil {
+			return xerrors.Errorf("unmarshalWithParams: %w", err)
+		}
+		return nil
 	})
 }
 
 func (br *berReader) endOctets() continuation {
-	return br.raw(0, false, func(data []byte) error {
+	return br._raw(0, false, func(data []byte) error {
 		if !bytes.Equal(data, []byte{0, 0}) {
-			return errors.Wrap(perr("expected end octets got %v", data), "endOctets")
+			return xerrors.Errorf("endOctets: expected end octets got %v", data)
 		}
 		return nil
 	})
@@ -134,13 +163,15 @@ func (br *berReader) endOctets() continuation {
 func (br *berReader) readTillEnd(dest io.Writer) (err error) {
 	var stop bool
 	for !stop {
-		if err := br.readBER(br.raw(-1, true, func(data []byte) error {
+		if err := br.readBER(br._raw(-1, true, func(data []byte) error {
 			if bytes.Equal(data, []byte{0, 0}) {
 				stop = true
 				return nil
 			}
-			_, err = dest.Write(data)
-			return errors.Wrap(err, "writing to inner buffer")
+			if _, err = dest.Write(data); err != nil {
+				return xerrors.Errorf("writing to inner buffer: %w", err)
+			}
+			return nil
 		})); err != nil {
 			return err
 		}
@@ -150,58 +181,79 @@ func (br *berReader) readTillEnd(dest io.Writer) (err error) {
 
 func (br *berReader) raw(expected int, optional bool, process func([]byte) error) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
+		if err := br._raw(expected, optional, process)(class, constructed, tag, length); err != nil {
+			return xerrors.Errorf("raw: %w", err)
+		}
+		return nil
+	}
+}
+
+func (br *berReader) _raw(expected int, optional bool, process func([]byte) error) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
 		if expected >= 0 && tag != expected {
 			if !optional {
-				return errors.Wrap(perr("expected tag %d got %d", expected, tag), "raw")
+				return xerrors.Errorf("expected tag %d got %d", expected, tag)
 			}
 			return errConditionNotMet
 		}
 		var buf bytes.Buffer
 		if length < 0 {
 			if !constructed {
-				return errors.Wrap(fmt.Errorf("tag %d is indefinite length", tag), "raw")
+				return xerrors.Errorf("tag %d is indefinite length", tag)
 			} else if err = br.readTillEnd(&buf); err != nil {
-				return errors.WithMessage(err, "reading indefinite tag")
+				return err
 			}
 		} else {
 			if _, err = buf.Write(encodeMeta(class, constructed, tag, length)); err != nil {
-				return errors.Wrap(err, "raw")
+				return err
 			}
 			if _, err = io.Copy(&buf, io.LimitReader(br, int64(length))); err != nil {
-				return errors.Wrap(err, "raw")
+				return err
 			}
 		}
-		return errors.WithMessage(process(buf.Bytes()), "raw")
+		if err := process(buf.Bytes()); err != nil {
+			return xerrors.Errorf("process: %w", err)
+		}
+		return nil
 	}
 }
 
 func (br *berReader) octets(next continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
-		if tag != 4 {
-			return xerrors.Errorf("octets: %w", perr("expected tag 4 got %d", tag))
-		}
-		if length < 0 {
-			if err := br.readBER(br.combine(next, br.endOctets())); err != nil {
-				return xerrors.Errorf("octets: %w", err)
-			}
-			return nil
-		}
-		if err := next(class, constructed, tag, length); err != nil {
+		if err := br._octets(next)(class, constructed, tag, length); err != nil {
 			return xerrors.Errorf("octets: %w", err)
 		}
 		return nil
 	}
 }
 
+func (br *berReader) _octets(next continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
+		switch tag {
+		case 0:
+			if length == 0 {
+				return errConditionNotMet
+			}
+			return xerrors.Errorf("unexpected object of length %d", length)
+		case 4:
+			if length < 0 {
+				return br._repeat(br._octets(next))
+			}
+			return next(class, constructed, tag, length)
+		}
+		return xerrors.Errorf("expected tag 4 got %d: %w", tag)
+	}
+}
+
 func (br *berReader) oid(oid asn1.ObjectIdentifier, next continuation) continuation {
-	return br.sequence(
+	return br._sequence(
 		func(class int, constructed bool, tag int, length int) (err error) {
 			var actual asn1.ObjectIdentifier
-			if err = br.object(&actual, "")(class, constructed, tag, length); err != nil {
+			if err = br._object(&actual, "")(class, constructed, tag, length); err != nil {
 				return xerrors.Errorf("oid: %w", err)
 			}
 			if !actual.Equal(oid) {
-				return xerrors.Errorf("oid: %w", perr("expected oid %q got oid %q", oid, actual))
+				return xerrors.Errorf("oid: expected oid %q got oid %q", oid, actual)
 			}
 			return nil
 		}, next)
@@ -226,12 +278,24 @@ func (br *berReader) combine(conts ...continuation) continuation {
 
 func (br *berReader) sequence(conts ...continuation) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
+		if err := br._sequence(conts...)(class, constructed, tag, length); err != nil {
+			return xerrors.Errorf("sequence: %w", err)
+		}
+		return nil
+	}
+}
+
+func (br *berReader) _sequence(conts ...continuation) continuation {
+	return func(class int, constructed bool, tag int, length int) (err error) {
 		if length < 0 {
 			conts = append(conts, br.endOctets())
 		}
 		if !constructed {
-			return errors.Wrap(fmt.Errorf("expected constructed object, got tag %d", tag), "sequence")
+			return xerrors.Errorf("expected constructed object, got tag %d", tag)
 		}
-		return errors.WithMessage(br.readBER(br.combine(conts...)), "sequence")
+		if err := br.readBER(br.combine(conts...)); err != nil {
+			return err
+		}
+		return nil
 	}
 }
