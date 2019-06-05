@@ -23,7 +23,7 @@ import (
 	_ "crypto/sha256" // for crypto.SHA256
 	_ "crypto/sha512" // for crypto.SHA512 and crypto.SHA384
 
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 // PKCS7 Represents a PKCS7 structure
@@ -46,7 +46,7 @@ type contentInfo struct {
 // ErrUnsupportedContentType is returned when a PKCS7 content is not supported.
 // Currently only Data (1.2.840.113549.1.7.1), Signed Data (1.2.840.113549.1.7.2),
 // and Enveloped Data are supported (1.2.840.113549.1.7.3)
-var ErrUnsupportedContentType = errors.New("pkcs7: cannot parse data: unimplemented content type")
+var ErrUnsupportedContentType = xerrors.New("pkcs7: cannot parse data: unimplemented content type")
 
 type unsignedData []byte
 
@@ -128,7 +128,7 @@ type signerInfo struct {
 // Parse decodes a BER encoded PKCS7 package
 func Parse(data []byte) (p7 *PKCS7, err error) {
 	if len(data) == 0 {
-		return nil, errors.New("pkcs7: input data is empty")
+		return nil, xerrors.New("pkcs7: input data is empty")
 	}
 	var info contentInfo
 	der, err := ber2der(data)
@@ -196,15 +196,17 @@ func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 
 	var val asn1.RawValue
 	if _, err := asn1.Unmarshal(raw.Raw, &val); err != nil {
-		return nil, errors.Wrap(err, "unmarshaling certificates asn1")
+		return nil, xerrors.Errorf("unmarshaling certificates asn1: %w", err)
 	}
 	data := val.Bytes
 	if val.Class != 2 {
 		data = val.FullBytes
 	}
 	res, err := x509.ParseCertificates(data)
-	err = errors.Wrap(err, "parsing x509 certificates")
-	return res, err
+	if err != nil {
+		return nil, xerrors.Errorf("parsing x509 certificates: %w", err)
+	}
+	return res, nil
 }
 
 func parseEnvelopedData(data []byte) (*PKCS7, error) {
@@ -222,7 +224,7 @@ func parseEnvelopedData(data []byte) (*PKCS7, error) {
 // this time.
 func (p7 *PKCS7) Verify() (err error) {
 	if len(p7.Signers) == 0 {
-		return errors.New("pkcs7: Message has no signers")
+		return xerrors.New("pkcs7: Message has no signers")
 	}
 	for _, signer := range p7.Signers {
 		if err := verifySignature(p7, signer); err != nil {
@@ -263,7 +265,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo) error {
 	}
 	cert := getCertFromCertsByIssuerAndSerial(p7.Certificates, signer.IssuerAndSerialNumber)
 	if cert == nil {
-		return errors.New("pkcs7: No certificate for signer")
+		return xerrors.New("pkcs7: No certificate for signer")
 	}
 
 	algo := getSignatureAlgorithmFromAI(signer.DigestEncryptionAlgorithm)
@@ -286,7 +288,7 @@ func marshalAttributes(attrs []attribute) ([]byte, error) {
 		A []attribute `asn1:"set"`
 	}{A: attrs})
 	if err != nil {
-		return nil, errors.Wrap(err, "marshaling attributes")
+		return nil, xerrors.Errorf("marshaling attributes: %w", err)
 	}
 
 	// Remove the leading sequence octets
@@ -320,7 +322,7 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	case oid.Equal(oidSHA512):
 		return crypto.SHA512, nil
 	}
-	return crypto.Hash(0), errors.Wrap(ErrUnsupportedAlgorithm, "getting hash for OID")
+	return crypto.Hash(0), xerrors.Errorf("getting hash for OID: %w", ErrUnsupportedAlgorithm)
 }
 
 func getSignAlgorithm(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
@@ -357,10 +359,10 @@ func (p7 *PKCS7) GetOnlySigner() *x509.Certificate {
 }
 
 // ErrUnsupportedAlgorithm tells you when our quick dev assumptions have failed
-var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, DES, DES-EDE3, AES-256-CBC and AES-128-GCM supported")
+var ErrUnsupportedAlgorithm = xerrors.New("pkcs7: cannot decrypt data: only RSA, DES, DES-EDE3, AES-256-CBC and AES-128-GCM supported")
 
 // ErrNotEncryptedContent is returned when attempting to Decrypt data that is not encrypted data
-var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
+var ErrNotEncryptedContent = xerrors.New("pkcs7: content data is a decryptable data type")
 
 // Decrypt decrypts encrypted content info for recipient cert and private key
 func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, error) {
@@ -370,7 +372,7 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 	}
 	recipient := selectRecipientForCertificate(data.RecipientInfos, cert)
 	if recipient.EncryptedKey == nil {
-		return nil, errors.New("pkcs7: no enveloped recipient for provided certificate")
+		return nil, xerrors.New("pkcs7: no enveloped recipient for provided certificate")
 	}
 	if priv := pk.(*rsa.PrivateKey); priv != nil {
 		var contentKey []byte
@@ -455,10 +457,10 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 		}
 
 		if len(params.Nonce) != gcm.NonceSize() {
-			return nil, errors.New("pkcs7: encryption algorithm parameters are incorrect")
+			return nil, xerrors.New("pkcs7: encryption algorithm parameters are incorrect")
 		}
 		if params.ICVLen != gcm.Overhead() {
-			return nil, errors.New("pkcs7: encryption algorithm parameters are incorrect")
+			return nil, xerrors.New("pkcs7: encryption algorithm parameters are incorrect")
 		}
 
 		plaintext, err := gcm.Open(nil, params.Nonce, cyphertext, nil)
@@ -471,7 +473,7 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 
 	iv := eci.ContentEncryptionAlgorithm.Parameters.Bytes
 	if len(iv) != block.BlockSize() {
-		return nil, errors.New("pkcs7: encryption algorithm parameters are malformed")
+		return nil, xerrors.New("pkcs7: encryption algorithm parameters are malformed")
 	}
 	mode := cipher.NewCBCDecrypter(block, iv)
 	plaintext := make([]byte, len(cyphertext))
@@ -522,7 +524,7 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 	pad := data[len(data)-padlen:]
 	for _, padbyte := range pad {
 		if padbyte != byte(padlen) {
-			return nil, errors.New("invalid padding")
+			return nil, xerrors.New("invalid padding")
 		}
 	}
 
@@ -536,17 +538,17 @@ func unmarshalAttribute(attrs []attribute, attributeType asn1.ObjectIdentifier, 
 			return err
 		}
 	}
-	return errors.New("pkcs7: attribute type not in attributes")
+	return xerrors.New("pkcs7: attribute type not in attributes")
 }
 
 // UnmarshalSignedAttribute decodes a single attribute from the signer info
 func (p7 *PKCS7) UnmarshalSignedAttribute(attributeType asn1.ObjectIdentifier, out interface{}) error {
 	sd, ok := p7.raw.(signedData)
 	if !ok {
-		return errors.New("pkcs7: payload is not signedData content")
+		return xerrors.New("pkcs7: payload is not signedData content")
 	}
 	if len(sd.SignerInfos) < 1 {
-		return errors.New("pkcs7: payload has no signers")
+		return xerrors.New("pkcs7: payload has no signers")
 	}
 	attributes := sd.SignerInfos[0].AuthenticatedAttributes
 	return unmarshalAttribute(attributes, attributeType, out)
@@ -643,7 +645,7 @@ func (attrs *attributes) ForMarshaling() ([]attribute, error) {
 		attrValue := attrs.values[i]
 		asn1Value, err := asn1.Marshal(attrValue)
 		if err != nil {
-			return nil, errors.Wrapf(err, "marshaling value for %v", attrType)
+			return nil, xerrors.Errorf("marshaling value for %v: %w", attrType, err)
 		}
 		attr := attribute{
 			Type:  attrType,
@@ -651,7 +653,7 @@ func (attrs *attributes) ForMarshaling() ([]attribute, error) {
 		}
 		encoded, err := asn1.Marshal(attr)
 		if err != nil {
-			return nil, errors.Wrapf(err, "marshaling attribute %v", attr)
+			return nil, xerrors.Errorf("marshaling attribute %v: %w", attr, err)
 		}
 		sortables[i] = sortableAttribute{
 			SortKey:   encoded,
@@ -677,7 +679,7 @@ func (sd *SignedData) AddSigner(cert *x509.Certificate, pkey crypto.PrivateKey, 
 	}
 	signature, err := signAttributes(finalAttrs, pkey, crypto.SHA256)
 	if err != nil {
-		return errors.Wrap(err, "signing attrs")
+		return xerrors.Errorf("signing attrs: %w", err)
 	}
 
 	ias, err := cert2issuerAndSerial(cert)
@@ -747,10 +749,12 @@ func signAttributes(attrs []attribute, pkey crypto.PrivateKey, hash crypto.Hash)
 	switch priv := pkey.(type) {
 	case *rsa.PrivateKey:
 		data, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, hashed)
-		err = errors.Wrap(err, "signing pkcs15")
-		return data, err
+		if err != nil {
+			return nil, xerrors.Errorf("signing pkcs15: %w", err)
+		}
+		return data, nil
 	}
-	return nil, errors.Wrap(ErrUnsupportedAlgorithm, "signing attributes")
+	return nil, xerrors.Errorf("signing attributes: %w", ErrUnsupportedAlgorithm)
 }
 
 // concats and wraps the certificates in the RawValue structure
@@ -812,7 +816,7 @@ var ContentEncryptionAlgorithm = EncryptionAlgorithmDESCBC
 
 // ErrUnsupportedEncryptionAlgorithm is returned when attempting to encrypt
 // content with an unsupported algorithm.
-var ErrUnsupportedEncryptionAlgorithm = errors.New("pkcs7: cannot encrypt content: only DES-CBC and AES-128-GCM supported")
+var ErrUnsupportedEncryptionAlgorithm = xerrors.New("pkcs7: cannot encrypt content: only DES-CBC and AES-128-GCM supported")
 
 const nonceSize = 12
 

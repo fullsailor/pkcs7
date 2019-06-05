@@ -4,7 +4,7 @@ import (
 	"encoding/asn1"
 	"io"
 
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 type berWriter struct {
@@ -72,11 +72,12 @@ func (w *berWriter) object(val interface{}, params string) continuation {
 	return func(class int, constructed bool, tag int, length int) (err error) {
 		data, err := asn1.MarshalWithParams(val, params)
 		if err != nil {
-			return errors.Wrap(err, "marshaling asn1")
+			return xerrors.Errorf("marshaling asn1: %w", err)
 		}
-		_, err = w.Write(data)
-		err = errors.Wrap(err, "writing data bytes")
-		return
+		if _, err = w.Write(data); err != nil {
+			return xerrors.Errorf("writing data bytes: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -117,9 +118,10 @@ func (w *berWriter) optional(tag int, next continuation) continuation {
 
 func (w *berWriter) raw(tag int, data []byte) continuation {
 	return func(_ int, _ bool, _ int, _ int) (err error) {
-		_, err = w.Write(data)
-		err = errors.Wrap(err, "writing raw bytes")
-		return
+		if _, err = w.Write(data); err != nil {
+			return xerrors.Errorf("writing raw bytes:  %w", err)
+		}
+		return nil
 	}
 }
 
