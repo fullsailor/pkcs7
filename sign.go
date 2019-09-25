@@ -116,20 +116,34 @@ func (sd *SignedData) AddSigner(ee *x509.Certificate, pkey crypto.PrivateKey, co
 }
 
 // AddSignerChain signs attributes about the content and adds certificates
-// and signers infos to the Signed Data. The certificate and private
+// and signers infos to the Signed Data. The certificate and private key
 // of the end-entity signer are used to issue the signature, and any
 // parent of that end-entity that need to be added to the list of
 // certifications can be specified in the parents slice.
 //
 // The signature algorithm used to hash the data is the one of the end-entity
 // certificate.
-//
+func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKey, parents []*x509.Certificate, config SignerInfoConfig) error {
 // Following RFC 2315, 9.2 SignerInfo type, the distinguished name of
 // the issuer of the end-entity signer is stored in the issuerAndSerialNumber
 // section of the SignedData.SignerInfo, alongside the serial number of
 // the end-entity.
-func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKey, chain []*x509.Certificate, config SignerInfoConfig) error {
-	sd.sd.DigestAlgorithmIdentifiers = append(sd.sd.DigestAlgorithmIdentifiers, pkix.AlgorithmIdentifier{Algorithm: sd.digestOid})
+	var ias issuerAndSerial
+	ias.SerialNumber = ee.SerialNumber
+	if len(parents) == 0 {
+		// no parent, the issuer is the end-entity cert itself
+		ias.IssuerName = asn1.RawValue{FullBytes: ee.RawIssuer}
+	} else {
+		err := verifyPartialChain(ee, parents)
+		if err != nil {
+			return err
+		}
+		// the first parent is the issuer
+		ias.IssuerName = asn1.RawValue{FullBytes: parents[0].RawSubject}
+	}
+	sd.sd.DigestAlgorithmIdentifiers = append(sd.sd.DigestAlgorithmIdentifiers,
+		pkix.AlgorithmIdentifier{Algorithm: sd.digestOid},
+	)
 	hash, err := getHashForOID(sd.digestOid)
 	if err != nil {
 		return err
@@ -160,22 +174,10 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	if err != nil {
 		return err
 	}
+	// create signature of signed attributes
 	signature, err := signAttributes(finalAttrs, pkey, hash)
 	if err != nil {
 		return err
-	}
-	var ias issuerAndSerial
-	ias.SerialNumber = ee.SerialNumber
-	if len(chain) == 0 {
-		// no parent, the issue is the end-entity cert itself
-		ias.IssuerName = asn1.RawValue{FullBytes: ee.RawIssuer}
-	} else {
-		err = verifyPartialChain(ee, chain)
-		if err != nil {
-			return err
-		}
-		// the first parent is the issuer
-		ias.IssuerName = asn1.RawValue{FullBytes: chain[0].RawSubject}
 	}
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,
@@ -186,10 +188,9 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 		EncryptedDigest:           signature,
 		Version:                   1,
 	}
-	// create signature of signed attributes
 	sd.certs = append(sd.certs, ee)
-	if len(chain) > 0 {
-		sd.certs = append(sd.certs, chain...)
+	if len(parents) > 0 {
+		sd.certs = append(sd.certs, parents...)
 	}
 	sd.sd.SignerInfos = append(sd.sd.SignerInfos, signer)
 	return nil
