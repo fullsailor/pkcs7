@@ -61,10 +61,10 @@ type signerInfo struct {
 	Version                   int `asn1:"default:1"`
 	IssuerAndSerialNumber     issuerAndSerial
 	DigestAlgorithm           pkix.AlgorithmIdentifier
-	AuthenticatedAttributes   []attribute `asn1:"optional,tag:0"`
+	AuthenticatedAttributes   []attribute `asn1:"optional,omitempty,tag:0"`
 	DigestEncryptionAlgorithm pkix.AlgorithmIdentifier
 	EncryptedDigest           []byte
-	UnauthenticatedAttributes []attribute `asn1:"optional,tag:1"`
+	UnauthenticatedAttributes []attribute `asn1:"optional,omitempty,tag:1"`
 }
 
 type attribute struct {
@@ -144,7 +144,7 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	attrs := &attributes{}
 	attrs.Add(OIDAttributeContentType, sd.sd.ContentInfo.ContentType)
 	attrs.Add(OIDAttributeMessageDigest, sd.messageDigest)
-	attrs.Add(OIDAttributeSigningTime, time.Now())
+	attrs.Add(OIDAttributeSigningTime, time.Now().UTC())
 	for _, attr := range config.ExtraSignedAttributes {
 		attrs.Add(attr.Type, attr.Value)
 	}
