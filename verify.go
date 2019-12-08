@@ -7,6 +7,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ocsp"
 	"time"
 )
 
@@ -137,12 +138,42 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 		// assuming this is tag 04
 		content = compound.Bytes
 	}
-	return &PKCS7{
+
+	p7 := &PKCS7{
 		Content:      content,
 		Certificates: certs,
-		CRLs:         sd.CRLs,
 		Signers:      sd.SignerInfos,
-		raw:          sd}, nil
+		raw:          sd,
+	}
+	for _, revInfo := range sd.RevocationInfoChoices {
+		switch revInfo.Tag {
+		case 1:
+			continue
+			otherInfo := &OtherRevocationInfoFormat{}
+			_, err := asn1.Unmarshal(revInfo.FullBytes, otherInfo)
+			if err != nil {
+				return nil, err
+			}
+			if otherInfo.OtherRevInfoFormat.Equal(OIDOCSP) {
+				ocspResponse := &ocsp.Response{}
+				_, err := asn1.Unmarshal(revInfo.FullBytes, ocspResponse)
+				if err != nil {
+					return nil, err
+				}
+				p7.OCSPs = append(p7.OCSPs, *ocspResponse)
+			}
+
+		default:
+			var crl pkix.CertificateList
+			_, err := asn1.Unmarshal(revInfo.FullBytes, &crl)
+			if err != nil {
+				return nil, err
+			}
+			p7.CRLs = append(p7.CRLs, crl)
+		}
+	}
+
+	return p7, nil
 }
 
 // verifyCertChain takes an end-entity certs, a list of potential intermediates and a

@@ -52,9 +52,14 @@ type signedData struct {
 	Version                    int                        `asn1:"default:1"`
 	DigestAlgorithmIdentifiers []pkix.AlgorithmIdentifier `asn1:"set"`
 	ContentInfo                contentInfo
-	Certificates               rawCertificates        `asn1:"optional,tag:0"`
-	CRLs                       []pkix.CertificateList `asn1:"optional,tag:1"`
-	SignerInfos                []signerInfo           `asn1:"set"`
+	Certificates               rawCertificates `asn1:"optional,tag:0"`
+	RevocationInfoChoices      []asn1.RawValue `asn1:"optional,set,tag:1"`
+	SignerInfos                []signerInfo    `asn1:"set"`
+}
+
+type OtherRevocationInfoFormat struct {
+	OtherRevInfoFormat asn1.ObjectIdentifier
+	OtherRevInfo       asn1.RawValue
 }
 
 type signerInfo struct {
@@ -392,7 +397,6 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 		Version:      1,
 		ContentInfo:  emptyContent,
 		Certificates: rawCert,
-		CRLs:         []pkix.CertificateList{},
 	}
 	content, err := asn1.Marshal(sd)
 	if err != nil {

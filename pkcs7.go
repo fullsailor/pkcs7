@@ -11,6 +11,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ocsp"
 	"sort"
 
 	_ "crypto/sha1" // for crypto.SHA1
@@ -21,6 +22,7 @@ type PKCS7 struct {
 	Content      []byte
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList
+	OCSPs        []ocsp.Response
 	Signers      []signerInfo
 	raw          interface{}
 }
@@ -78,6 +80,8 @@ var (
 	OIDEncryptionAlgorithmAES128GCM  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
 	OIDEncryptionAlgorithmAES128CBC  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 	OIDEncryptionAlgorithmAES256GCM  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 46}
+
+	OIDOCSP = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1}
 )
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
