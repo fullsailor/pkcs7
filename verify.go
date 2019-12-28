@@ -156,11 +156,12 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 				return nil, fmt.Errorf("no oid found: %v", oid)
 			}
 			if oid.Equal(OIDOCSP) {
-				ocspResponse, err := ocsp.ParseResponse([]byte(s), nil)
+				p7.RawOCSPResponses = append(p7.RawOCSPResponses, s)
+				ocspResponse, err := ocsp.ParseResponse(s, nil)
 				if err != nil {
 					return nil, err
 				}
-				p7.OCSPs = append(p7.OCSPs, *ocspResponse)
+				p7.OCSPResponses = append(p7.OCSPResponses, *ocspResponse)
 			}
 
 		default:

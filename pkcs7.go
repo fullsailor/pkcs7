@@ -19,12 +19,13 @@ import (
 
 // PKCS7 Represents a PKCS7 structure
 type PKCS7 struct {
-	Content      []byte
-	Certificates []*x509.Certificate
-	CRLs         []pkix.CertificateList
-	OCSPs        []ocsp.Response
-	Signers      []signerInfo
-	raw          interface{}
+	Content          []byte
+	Certificates     []*x509.Certificate
+	CRLs             []pkix.CertificateList
+	OCSPResponses    []ocsp.Response
+	RawOCSPResponses [][]byte
+	Signers          []signerInfo
+	raw              interface{}
 }
 
 type contentInfo struct {
