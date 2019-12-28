@@ -7,6 +7,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/ocsp"
 	"time"
 )
@@ -148,15 +149,14 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 	for _, revInfo := range sd.RevocationInfoChoices {
 		switch revInfo.Tag {
 		case 1:
-			continue
-			otherInfo := &OtherRevocationInfoFormat{}
-			_, err := asn1.Unmarshal(revInfo.FullBytes, otherInfo)
-			if err != nil {
-				return nil, err
+			s := cryptobyte.String(revInfo.Bytes)
+			var oid asn1.ObjectIdentifier
+			ok := s.ReadASN1ObjectIdentifier(&oid)
+			if !ok {
+				return nil, fmt.Errorf("no oid found: %v", oid)
 			}
-			if otherInfo.OtherRevInfoFormat.Equal(OIDOCSP) {
-				ocspResponse := &ocsp.Response{}
-				_, err := asn1.Unmarshal(revInfo.FullBytes, ocspResponse)
+			if oid.Equal(OIDOCSP) {
+				ocspResponse, err := ocsp.ParseResponse([]byte(s), nil)
 				if err != nil {
 					return nil, err
 				}

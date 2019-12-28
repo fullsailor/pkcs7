@@ -57,11 +57,6 @@ type signedData struct {
 	SignerInfos                []signerInfo    `asn1:"set"`
 }
 
-type OtherRevocationInfoFormat struct {
-	OtherRevInfoFormat asn1.ObjectIdentifier
-	OtherRevInfo       asn1.RawValue
-}
-
 type signerInfo struct {
 	Version                   int `asn1:"default:1"`
 	IssuerAndSerialNumber     issuerAndSerial
