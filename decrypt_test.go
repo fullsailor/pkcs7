@@ -6,7 +6,6 @@ import (
 )
 
 func TestDecrypt(t *testing.T) {
-	t.Parallel()
 	fixture := UnmarshalTestFixture(EncryptedTestFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
