@@ -115,7 +115,7 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair, sigAlg x509
 			CommonName:   name,
 			Organization: []string{"Acme Co"},
 		},
-		NotBefore:   time.Now(),
+		NotBefore:   time.Now().Add(-1 *time.Second),
 		NotAfter:    time.Now().AddDate(1, 0, 0),
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
@@ -271,13 +271,13 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair, sigAlg x509
 		}
 	case *dsa.PrivateKey:
 		pub := &priv.(*dsa.PrivateKey).PublicKey
-		switch issuerKey.(type) {
+		switch issuerKey := issuerKey.(type) {
 		case *rsa.PrivateKey:
-			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, pub, issuerKey.(*rsa.PrivateKey))
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, pub, issuerKey)
 		case *ecdsa.PrivateKey:
-			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*dsa.PublicKey), issuerKey.(*ecdsa.PrivateKey))
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*dsa.PublicKey), issuerKey)
 		case *dsa.PrivateKey:
-			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*dsa.PublicKey), issuerKey.(*dsa.PrivateKey))
+			derCert, err = x509.CreateCertificate(rand.Reader, &template, issuerCert, priv.(*dsa.PublicKey), issuerKey)
 		}
 	}
 	if err != nil {

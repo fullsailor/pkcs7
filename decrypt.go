@@ -30,10 +30,10 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte
 	if recipient.EncryptedKey == nil {
 		return nil, errors.New("pkcs7: no enveloped recipient for provided certificate")
 	}
-	switch pkey.(type) {
+	switch pkey := pkey.(type) {
 	case *rsa.PrivateKey:
 		var contentKey []byte
-		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, pkey.(*rsa.PrivateKey), recipient.EncryptedKey)
+		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, pkey, recipient.EncryptedKey)
 		if err != nil {
 			return nil, err
 		}

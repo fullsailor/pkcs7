@@ -541,12 +541,12 @@ but that's not what ships are built for.
 				}
 				var derKey []byte
 				priv := *signerCert.PrivateKey
-				switch priv.(type) {
+				switch priv := priv.(type) {
 				case *rsa.PrivateKey:
-					derKey = x509.MarshalPKCS1PrivateKey(priv.(*rsa.PrivateKey))
+					derKey = x509.MarshalPKCS1PrivateKey(priv)
 					pem.Encode(fd, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: derKey})
 				case *ecdsa.PrivateKey:
-					derKey, err = x509.MarshalECPrivateKey(priv.(*ecdsa.PrivateKey))
+					derKey, err = x509.MarshalECPrivateKey(priv)
 					if err != nil {
 						t.Fatal(err)
 					}
