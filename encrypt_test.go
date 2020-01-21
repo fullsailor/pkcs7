@@ -7,6 +7,7 @@ import (
 )
 
 func TestEncrypt(t *testing.T) {
+	t.Parallel()
 	modes := []int{
 		EncryptionAlgorithmDESCBC,
 		EncryptionAlgorithmAES128CBC,
@@ -48,6 +49,7 @@ func TestEncrypt(t *testing.T) {
 }
 
 func TestEncryptUsingPSK(t *testing.T) {
+	t.Parallel()
 	modes := []int{
 		EncryptionAlgorithmDESCBC,
 		EncryptionAlgorithmAES128GCM,
@@ -81,6 +83,7 @@ func TestEncryptUsingPSK(t *testing.T) {
 }
 
 func TestPad(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		Original  []byte
 		Expected  []byte

@@ -12,6 +12,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ocsp"
 	"sort"
 
 	_ "crypto/sha1" // for crypto.SHA1
@@ -19,11 +20,13 @@ import (
 
 // PKCS7 Represents a PKCS7 structure
 type PKCS7 struct {
-	Content      []byte
-	Certificates []*x509.Certificate
-	CRLs         []pkix.CertificateList
-	Signers      []signerInfo
-	raw          interface{}
+	Content          []byte
+	Certificates     []*x509.Certificate
+	CRLs             []pkix.CertificateList
+	OCSPResponses    []ocsp.Response
+	RawOCSPResponses [][]byte
+	Signers          []signerInfo
+	raw              interface{}
 }
 
 type contentInfo struct {
@@ -40,13 +43,14 @@ type unsignedData []byte
 
 var (
 	// Signed Data OIDs
-	OIDData                   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
-	OIDSignedData             = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
-	OIDEnvelopedData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 3}
-	OIDEncryptedData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
-	OIDAttributeContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
-	OIDAttributeMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
-	OIDAttributeSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+	OIDData                    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
+	OIDSignedData              = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
+	OIDEnvelopedData           = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 3}
+	OIDEncryptedData           = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
+	OIDAttributeContentType    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
+	OIDAttributeMessageDigest  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
+	OIDAttributeSigningTime    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+	OIDAttributeTimeStampToken = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 14}
 
 	// Digest Algorithms
 	OIDDigestAlgorithmSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
@@ -80,6 +84,8 @@ var (
 	OIDEncryptionAlgorithmAES128GCM  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
 	OIDEncryptionAlgorithmAES128CBC  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
 	OIDEncryptionAlgorithmAES256GCM  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 46}
+
+	OIDOCSP = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1, 1}
 )
 
 func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
@@ -112,6 +118,22 @@ func getDigestOIDForSignatureAlgorithm(digestAlg x509.SignatureAlgorithm) (asn1.
 		return OIDDigestAlgorithmSHA512, nil
 	}
 	return nil, fmt.Errorf("pkcs7: cannot convert hash to oid, unknown hash algorithm")
+}
+
+// getDigestOIDForHashAlgorithm takes a pkix algorithm identifier
+// and returns the corresponding OID digest algorithm
+func getDigestOIDForHashAlgorithm(digestAlg crypto.Hash) (asn1.ObjectIdentifier, error) {
+	switch digestAlg {
+	case crypto.SHA1:
+		return OIDDigestAlgorithmSHA1, nil
+	case crypto.SHA256:
+		return OIDDigestAlgorithmSHA256, nil
+	case crypto.SHA384:
+		return OIDDigestAlgorithmSHA384, nil
+	case crypto.SHA512:
+		return OIDDigestAlgorithmSHA512, nil
+	}
+	return nil, ErrUnsupportedAlgorithm
 }
 
 // getOIDForEncryptionAlgorithm takes the private key type of the signer and

@@ -10,7 +10,9 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/big"
+	"net/http"
 	"time"
 )
 
@@ -52,9 +54,9 @@ type signedData struct {
 	Version                    int                        `asn1:"default:1"`
 	DigestAlgorithmIdentifiers []pkix.AlgorithmIdentifier `asn1:"set"`
 	ContentInfo                contentInfo
-	Certificates               rawCertificates        `asn1:"optional,tag:0"`
-	CRLs                       []pkix.CertificateList `asn1:"optional,tag:1"`
-	SignerInfos                []signerInfo           `asn1:"set"`
+	Certificates               rawCertificates `asn1:"optional,tag:0"`
+	RevocationInfoChoices      []asn1.RawValue `asn1:"optional,set,tag:1"`
+	SignerInfos                []signerInfo    `asn1:"set"`
 }
 
 type signerInfo struct {
@@ -275,6 +277,73 @@ func (si *signerInfo) SetUnauthenticatedAttributes(extraUnsignedAttrs []Attribut
 	return nil
 }
 
+// AddTimestampToSigner requests a RFC3161 timestamp from an upstream tsa for a
+// given signer and inserts it into the unauthenticated attributes of that signer
+func (sd *SignedData) AddTimestampToSigner(signerID int, tsa string) (err error) {
+	opts := new(TSRequestOptions)
+	opts.Hash, err = getHashForOID(sd.digestOid)
+	if err != nil {
+		return err
+	}
+	opts.Certificates = true
+	if len(sd.sd.SignerInfos) < (signerID + 1) {
+		return fmt.Errorf("no signer information found for ID %d", signerID)
+	}
+	tsreq, err := CreateTSRequest(sd.sd.SignerInfos[signerID].EncryptedDigest, opts)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", tsa, bytes.NewReader(tsreq))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/timestamp-query")
+	cli := &http.Client{}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("tsa returned empty response")
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("tsa returned \"%d %s\" instead of 200 OK", resp.StatusCode, resp.Status)
+	}
+	// parse it to make sure we got a valid response
+	var tsResp timeStampResp
+	rest, err := asn1.Unmarshal(body, &tsResp)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return fmt.Errorf("trailing data in timestamp response")
+	}
+
+	if tsResp.Status.Status > 0 {
+		return fmt.Errorf("%s: %s", pkiFailureInfo(tsResp.Status.FailInfo).String(), tsResp.Status.StatusString)
+	}
+
+	if len(tsResp.TimeStampToken.Bytes) == 0 {
+		return fmt.Errorf("no pkcs7 data in timestamp response")
+	}
+	// add the timestamp token to the unauthenticated attributes
+	attrs := &attributes{}
+	for _, attr := range sd.sd.SignerInfos[signerID].UnauthenticatedAttributes {
+		attrs.Add(attr.Type, attr.Value)
+	}
+	attrs.Add(OIDAttributeTimeStampToken, tsResp.TimeStampToken)
+	sd.sd.SignerInfos[signerID].UnauthenticatedAttributes, err = attrs.ForMarshalling()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // AddCertificate adds the certificate to the payload. Useful for parent certificates
 func (sd *SignedData) AddCertificate(cert *x509.Certificate) {
 	sd.certs = append(sd.certs, cert)
@@ -415,7 +484,6 @@ func DegenerateCertificate(cert []byte) ([]byte, error) {
 		Version:      1,
 		ContentInfo:  emptyContent,
 		Certificates: rawCert,
-		CRLs:         []pkix.CertificateList{},
 	}
 	content, err := asn1.Marshal(sd)
 	if err != nil {

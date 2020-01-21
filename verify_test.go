@@ -16,6 +16,7 @@ import (
 )
 
 func TestVerify(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(SignedTestFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -82,6 +83,7 @@ BCvcu85DqJeJyQv44Oe1qsXEX9BfcQIOVaoep35RPlKi9g==
 -----END PRIVATE KEY-----`
 
 func TestVerifyEC2(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -133,6 +135,7 @@ vSeDCOUMYQR7R9LINYwouHIziqQYMAkGByqGSM44BAMDLwAwLAIUWXBlk40xTwSw
 -----END CERTIFICATE-----`
 
 func TestVerifyAppStore(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(AppStoreReceiptFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -291,6 +294,7 @@ Hg0OMA60
 var ApkEcdsaContent = `U2lnbmF0dXJlLVZlcnNpb246IDEuMA0KU0hBLTUxMi1EaWdlc3QtTWFuaWZlc3Q6IFAvVDRqSWtTMjQvNzFxeFE2WW1MeEtNdkRPUUF0WjUxR090dFRzUU9yemhHRQ0KIEpaUGVpWUtyUzZYY090bStYaWlFVC9uS2tYdWVtUVBwZ2RBRzFKUzFnPT0NCkNyZWF0ZWQtQnk6IDEuMCAoQW5kcm9pZCBTaWduQXBrKQ0KDQpOYW1lOiBBbmRyb2lkTWFuaWZlc3QueG1sDQpTSEEtNTEyLURpZ2VzdDogcm9NbWVQZmllYUNQSjFJK2VzMVpsYis0anB2UXowNHZqRWVpL2U0dkN1ald0VVVWSHEzMkNXDQogMUxsOHZiZGMzMCtRc1FlN29ibld4dmhLdXN2K3c1a2c9PQ0KDQpOYW1lOiByZXNvdXJjZXMuYXJzYw0KU0hBLTUxMi1EaWdlc3Q6IG5aYW1aUzlPZTRBRW41cEZaaCtoQ1JFT3krb1N6a3hHdU5YZU0wUFF6WGVBVlVQV3hSVzFPYQ0KIGVLbThRbXdmTmhhaS9HOEcwRUhIbHZEQWdlcy9HUGtBPT0NCg0KTmFtZTogY2xhc3Nlcy5kZXgNClNIQS01MTItRGlnZXN0OiBlbWlDQld2bkVSb0g2N2lCa3EwcUgrdm5tMkpaZDlMWUNEV051N3RNYzJ3bTRtV0dYSUVpWmcNCiBWZkVPV083MFRlZnFjUVhldkNtN2hQMnRpT0U3Y0w5UT09DQoNCg==`
 
 func TestVerifyFirefoxAddon(t *testing.T) {
+	t.Parallel()
 	fixture := UnmarshalTestFixture(FirefoxAddonFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
@@ -470,6 +474,7 @@ wNuvFqc=
 // this uses a chain of root, intermediate and signer cert, where the
 // intermediate is added to the certs but the root isn't.
 func TestSignWithOpenSSLAndVerify(t *testing.T) {
+	t.Parallel()
 	content := []byte(`
 A ship in port is safe,
 but that's not what ships are built for.
