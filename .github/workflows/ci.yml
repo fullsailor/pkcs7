@@ -1,0 +1,20 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test
+    strategy:
+      matrix:
+        go: ['1.12', '1.13', '1.14', '1.15', '1.16']
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go }}
+        stable: false
+    - name: Test
+      run: go vet . && go test -count=1 -covermode=count -coverprofile=coverage.out .
