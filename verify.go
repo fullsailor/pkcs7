@@ -70,7 +70,7 @@ func verifySignature(p7 *PKCS7, signer signerInfo, truststore *x509.CertPool) (e
 				return fmt.Errorf("pkcs7: signing time %q is outside of certificate validity %q to %q",
 					signingTime.Format(time.RFC3339),
 					ee.NotBefore.Format(time.RFC3339),
-					ee.NotBefore.Format(time.RFC3339))
+					ee.NotAfter.Format(time.RFC3339))
 			}
 		}
 	}
