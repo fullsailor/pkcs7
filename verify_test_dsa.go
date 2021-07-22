@@ -156,7 +156,6 @@ CWCGSAFlAwQDAgUAAzAAMC0CFQCIgQtrZZ9hdZG1ROhR5hc8nYEmbgIUAIlgC688
 qzy/7yePTlhlpj+ahMM=
 -----END CERTIFICATE-----`)
 
-
 type DSATestFixture struct {
 	Input       []byte
 	Certificate *x509.Certificate
