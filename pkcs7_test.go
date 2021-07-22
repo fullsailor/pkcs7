@@ -115,7 +115,7 @@ func createTestCertificateByIssuer(name string, issuer *certKeyPair, sigAlg x509
 			CommonName:   name,
 			Organization: []string{"Acme Co"},
 		},
-		NotBefore:   time.Now().Add(-1 *time.Second),
+		NotBefore:   time.Now().Add(-1 * time.Second),
 		NotAfter:    time.Now().AddDate(1, 0, 0),
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
