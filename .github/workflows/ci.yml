@@ -17,4 +17,4 @@ jobs:
         go-version: ${{ matrix.go }}
         stable: false
     - name: Test
-      run: go vet . && go test -count=1 -covermode=count -coverprofile=coverage.out .
+      run: go vet . && go build . && go test -count=1 -covermode=count -coverprofile=coverage.out .
