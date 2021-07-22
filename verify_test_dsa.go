@@ -13,7 +13,7 @@ import (
 )
 
 func TestVerifyEC2(t *testing.T) {
-	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
+	fixture := UnmarshalDSATestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
 		t.Errorf("Parse encountered unexpected error: %v", err)
@@ -155,3 +155,29 @@ ypPnjS5M0jm1PKMhMB8wHQYDVR0OBBYEFC0Yt5XdM0Kc95IX8NQ8XRssGPx7MA0G
 CWCGSAFlAwQDAgUAAzAAMC0CFQCIgQtrZZ9hdZG1ROhR5hc8nYEmbgIUAIlgC688
 qzy/7yePTlhlpj+ahMM=
 -----END CERTIFICATE-----`)
+
+
+type DSATestFixture struct {
+	Input       []byte
+	Certificate *x509.Certificate
+}
+
+func UnmarshalDSATestFixture(testPEMBlock string) DSATestFixture {
+	var result DSATestFixture
+	var derBlock *pem.Block
+	var pemBlock = []byte(testPEMBlock)
+	for {
+		derBlock, pemBlock = pem.Decode(pemBlock)
+		if derBlock == nil {
+			break
+		}
+		switch derBlock.Type {
+		case "PKCS7":
+			result.Input = derBlock.Bytes
+		case "CERTIFICATE":
+			result.Certificate, _ = x509.ParseCertificate(derBlock.Bytes)
+		}
+	}
+
+	return result
+}
