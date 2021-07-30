@@ -247,9 +247,32 @@ func TestVerifyFirefoxAddon(t *testing.T) {
 	p7.Content = FirefoxAddonContent
 	certPool := x509.NewCertPool()
 	certPool.AppendCertsFromPEM(FirefoxAddonRootCert)
+	// verifies at the signingTime authenticated attr
 	if err := p7.VerifyWithChain(certPool); err != nil {
 		t.Errorf("Verify failed with error: %v", err)
 	}
+
+	// TODO: update to check for an expiration error when the EE
+	// expires on 2021-08-16 20:04:58 +0000 UTC
+	//
+	// The chain has validity:
+	//
+	// EE:           2016-08-17 20:04:58 +0000 UTC 2021-08-16 20:04:58 +0000 UTC
+	// Intermediate: 2015-03-17 23:52:42 +0000 UTC 2025-03-14 23:52:42 +0000 UTC
+	// Root:         2015-03-17 22:53:57 +0000 UTC 2025-03-14 22:53:57 +0000 UTC
+	if err = p7.VerifyWithChainAtTime(certPool, time.Now().UTC()); err != nil {
+		t.Errorf("Verify at UTC now failed with error: %v", err)
+	}
+
+	expiredTime := time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if err = p7.VerifyWithChainAtTime(certPool, expiredTime); err == nil {
+		t.Errorf("Verify at expired time %s did not error", expiredTime)
+	}
+	notYetValidTime := time.Date(1999, time.July, 5, 0, 13, 0, 0, time.UTC)
+	if err = p7.VerifyWithChainAtTime(certPool, notYetValidTime); err == nil {
+		t.Errorf("Verify at not yet valid time %s did not error", notYetValidTime)
+	}
+
 	// Verify the certificate chain to make sure the identified root
 	// is the one we expect
 	ee := getCertFromCertsByIssuerAndSerial(p7.Certificates, p7.Signers[0].IssuerAndSerialNumber)
