@@ -252,15 +252,13 @@ func TestVerifyFirefoxAddon(t *testing.T) {
 		t.Errorf("Verify failed with error: %v", err)
 	}
 
-	// TODO: update to check for an expiration error when the EE
-	// expires on 2021-08-16 20:04:58 +0000 UTC
-	//
 	// The chain has validity:
 	//
 	// EE:           2016-08-17 20:04:58 +0000 UTC 2021-08-16 20:04:58 +0000 UTC
 	// Intermediate: 2015-03-17 23:52:42 +0000 UTC 2025-03-14 23:52:42 +0000 UTC
 	// Root:         2015-03-17 22:53:57 +0000 UTC 2025-03-14 22:53:57 +0000 UTC
-	if err = p7.VerifyWithChainAtTime(certPool, time.Now().UTC()); err != nil {
+	validTime := time.Date(2021, 8, 16, 20, 0, 0, 0, time.UTC)
+	if err = p7.VerifyWithChainAtTime(certPool, validTime); err != nil {
 		t.Errorf("Verify at UTC now failed with error: %v", err)
 	}
 
@@ -279,7 +277,7 @@ func TestVerifyFirefoxAddon(t *testing.T) {
 	if ee == nil {
 		t.Errorf("No end-entity certificate found for signer")
 	}
-	signingTime, _ := time.Parse(time.RFC3339, "2017-02-23 09:06:16-05:00")
+	signingTime := mustParseTime("2017-02-23T09:06:16-05:00")
 	chains, err := verifyCertChain(ee, p7.Certificates, certPool, signingTime)
 	if err != nil {
 		t.Error(err)
@@ -299,6 +297,14 @@ func TestVerifyFirefoxAddon(t *testing.T) {
 	if chains[0][2].Subject.CommonName != "root-ca-production-amo" {
 		t.Errorf("Expected to find root certificate with subject 'root-ca-production-amo', but found '%s'", chains[0][2].Subject.CommonName)
 	}
+}
+
+func mustParseTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }
 
 var FirefoxAddonContent = []byte(`Signature-Version: 1.0
