@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -301,8 +302,8 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
-  case oid.Equal(oidSHA256):
-    return crypto.SHA256, nil
+	case oid.Equal(oidSHA256):
+		return crypto.SHA256, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
@@ -344,10 +345,21 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pk crypto.PrivateKey) ([]byte, 
 	}
 	if priv := pk.(*rsa.PrivateKey); priv != nil {
 		var contentKey []byte
-		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, priv, recipient.EncryptedKey)
-		if err != nil {
-			return nil, err
+		var err error
+		algorithm := recipient.KeyEncryptionAlgorithm.Algorithm.String()
+		// If the algorithm is rsa0aesp then need to use a different decryption algorithm
+		if algorithm == "1.2.840.113549.1.1.7" {
+			contentKey, err = rsa.DecryptOAEP(sha1.New(), nil, priv, recipient.EncryptedKey, nil)
+			if err != nil {
+				return nil, fmt.Errorf("Error from decryption: %s\n", err)
+			}
+		} else {
+			contentKey, err = rsa.DecryptPKCS1v15(rand.Reader, priv, recipient.EncryptedKey)
+			if err != nil {
+				return nil, err
+			}
 		}
+
 		return data.EncryptedContentInfo.decrypt(contentKey)
 	}
 	fmt.Printf("Unsupported Private Key: %v\n", pk)
@@ -883,7 +895,7 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 // value is EncryptionAlgorithmDESCBC. To use a different algorithm, change the
 // value before calling Encrypt(). For example:
 //
-//     ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
+//	ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
 //
 // TODO(fullsailor): Add support for encrypting content with other algorithms
 func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {
