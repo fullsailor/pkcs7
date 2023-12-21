@@ -26,6 +26,7 @@ import (
 type PKCS7 struct {
 	Content      []byte
 	Certificates []*x509.Certificate
+	CertsRaw     []byte
 	CRLs         []pkix.CertificateList
 	Signers      []signerInfo
 	raw          interface{}
@@ -147,6 +148,35 @@ func Parse(data []byte) (p7 *PKCS7, err error) {
 	return nil, ErrUnsupportedContentType
 }
 
+// ParseRaw decodes a DER encoded PKCS7 package and returns raw byte arrays rather than fully parsed x509 certificates.
+func ParseRaw(data []byte) (p7 *PKCS7, err error) {
+	if len(data) == 0 {
+		return nil, errors.New("pkcs7: input data is empty")
+	}
+	var info contentInfo
+	der, err := ber2der(data)
+	if err != nil {
+		return nil, err
+	}
+	rest, err := asn1.Unmarshal(der, &info)
+	if len(rest) > 0 {
+		err = asn1.SyntaxError{Msg: "trailing data"}
+		return
+	}
+	if err != nil {
+		return
+	}
+
+	// fmt.Printf("--> Content Type: %s", info.ContentType)
+	switch {
+	case info.ContentType.Equal(oidSignedData):
+		return parseSignedDataRaw(info.Content.Bytes)
+	case info.ContentType.Equal(oidEnvelopedData):
+		return parseEnvelopedData(info.Content.Bytes)
+	}
+	return nil, ErrUnsupportedContentType
+}
+
 func parseSignedData(data []byte) (*PKCS7, error) {
 	var sd signedData
 	asn1.Unmarshal(data, &sd)
@@ -182,6 +212,41 @@ func parseSignedData(data []byte) (*PKCS7, error) {
 		raw:          sd}, nil
 }
 
+func parseSignedDataRaw(data []byte) (*PKCS7, error) {
+	var sd signedData
+	asn1.Unmarshal(data, &sd)
+	certs, err := sd.Certificates.ParseRaw()
+	if err != nil {
+		return nil, err
+	}
+	// fmt.Printf("--> Signed Data Version %d\n", sd.Version)
+
+	var compound asn1.RawValue
+	var content unsignedData
+
+	// The Content.Bytes maybe empty on PKI responses.
+	if len(sd.ContentInfo.Content.Bytes) > 0 {
+		if _, err := asn1.Unmarshal(sd.ContentInfo.Content.Bytes, &compound); err != nil {
+			return nil, err
+		}
+	}
+	// Compound octet string
+	if compound.IsCompound {
+		if _, err = asn1.Unmarshal(compound.Bytes, &content); err != nil {
+			return nil, err
+		}
+	} else {
+		// assuming this is tag 04
+		content = compound.Bytes
+	}
+	return &PKCS7{
+		Content:  content,
+		CertsRaw: certs,
+		CRLs:     sd.CRLs,
+		Signers:  sd.SignerInfos,
+		raw:      sd}, nil
+}
+
 func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 	if len(raw.Raw) == 0 {
 		return nil, nil
@@ -193,6 +258,19 @@ func (raw rawCertificates) Parse() ([]*x509.Certificate, error) {
 	}
 
 	return x509.ParseCertificates(val.Bytes)
+}
+
+func (raw rawCertificates) ParseRaw() ([]byte, error) {
+	if len(raw.Raw) == 0 {
+		return nil, nil
+	}
+
+	var val asn1.RawValue
+	if _, err := asn1.Unmarshal(raw.Raw, &val); err != nil {
+		return nil, err
+	}
+
+	return val.Bytes, nil
 }
 
 func parseEnvelopedData(data []byte) (*PKCS7, error) {
@@ -301,8 +379,8 @@ func getHashForOID(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	switch {
 	case oid.Equal(oidDigestAlgorithmSHA1):
 		return crypto.SHA1, nil
-  case oid.Equal(oidSHA256):
-    return crypto.SHA256, nil
+	case oid.Equal(oidSHA256):
+		return crypto.SHA256, nil
 	}
 	return crypto.Hash(0), ErrUnsupportedAlgorithm
 }
@@ -883,7 +961,7 @@ func encryptDESCBC(content []byte) ([]byte, *encryptedContentInfo, error) {
 // value is EncryptionAlgorithmDESCBC. To use a different algorithm, change the
 // value before calling Encrypt(). For example:
 //
-//     ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
+//	ContentEncryptionAlgorithm = EncryptionAlgorithmAES128GCM
 //
 // TODO(fullsailor): Add support for encrypting content with other algorithms
 func Encrypt(content []byte, recipients []*x509.Certificate) ([]byte, error) {

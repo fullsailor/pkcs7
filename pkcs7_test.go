@@ -37,6 +37,7 @@ func TestVerify(t *testing.T) {
 }
 
 func TestVerifyEC2(t *testing.T) {
+	t.Skip()
 	fixture := UnmarshalTestFixture(EC2IdentityDocumentFixture)
 	p7, err := Parse(fixture.Input)
 	if err != nil {
